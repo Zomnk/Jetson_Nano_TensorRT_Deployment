@@ -345,7 +345,7 @@ int main(int argc, char** argv) {
                 gettimeofday(&conn_tv, NULL);
                 connection_time_us = conn_tv.tv_sec * 1000000ULL + conn_tv.tv_usec;
 
-                cout << "\n等待2秒让机器人回到初始姿态..." << endl;
+                cout << "\n等待5秒让机器人回到初始姿态..." << endl;
             }
         }
 
@@ -354,10 +354,10 @@ int main(int argc, char** argv) {
         gettimeofday(&now_tv, NULL);
         uint64_t now_us = now_tv.tv_sec * 1000000ULL + now_tv.tv_usec;
 
-        // 检查初始化延迟（2秒）
+        // 检查初始化延迟（5秒）
         if (connected && !initialization_done) {
             uint64_t elapsed_since_connect = now_us - connection_time_us;
-            if (elapsed_since_connect >= 2000000) {
+            if (elapsed_since_connect >= 5000000) {
                 initialization_done = true;
                 cout << "✓ 初始化完成，开始正弦波测试..." << endl;
                 start_us = now_us;
@@ -371,7 +371,7 @@ int main(int argc, char** argv) {
                 }
 
                 // 显示倒计时
-                float remaining_s = (2000000 - elapsed_since_connect) / 1000000.0f;
+                float remaining_s = (5000000 - elapsed_since_connect) / 1000000.0f;
                 if ((int)(remaining_s * 10) % 5 == 0) {
                     cout << "\r初始化中... " << fixed << setprecision(1)
                          << remaining_s << "s      " << flush;
