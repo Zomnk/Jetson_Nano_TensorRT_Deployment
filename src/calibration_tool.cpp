@@ -166,9 +166,11 @@ bool save_yaml(const float init_pos[10], const string& filename) {
  * @param sock_fd UDP socket
  * @param addr ODroid地址
  * @param addr_len 地址长度
+ * @param calibrated_positions 已标定的关节位置数组（用于保持其他关节位置）
  * @return 标定的关节位置
  */
-float calibrate_joint(int joint_id, int sock_fd, struct sockaddr_in& addr, socklen_t addr_len) {
+float calibrate_joint(int joint_id, int sock_fd, struct sockaddr_in& addr, socklen_t addr_len,
+                     float calibrated_positions[10]) {
     cout << "\n========================================" << endl;
     cout << "正在标定: " << JOINT_NAMES[joint_id] << " [ID=" << joint_id << "]" << endl;
     cout << "========================================" << endl;
@@ -200,15 +202,28 @@ float calibrate_joint(int joint_id, int sock_fd, struct sockaddr_in& addr, sockl
             memcpy(&request, buf, sizeof(request));
             current_angle = request.q[joint_id];
 
-            // 关键：将所有关节的目标位置设置为当前实际位置
-            // 使用 dq_exp[0] = -999.0 作为标定模式标志
-            // ODroid端检测到此标志后会卸载电机扭矩
+            // 标定协议：
+            // - dq_exp[0] = -999.0 表示标定模式
+            // - tau_exp[0] = joint_id 表示当前标定的关节ID
+            // - 当前标定关节：q_exp = 当前实际位置（卸载扭矩）
+            // - 已标定关节：q_exp = 标定位置（保持位置）
+            // - 未标定关节：q_exp = 当前实际位置（跟随）
             for (int i = 0; i < 10; i++) {
-                response.q_exp[i] = request.q[i];
+                if (i == joint_id) {
+                    // 当前标定关节：跟随实际位置（卸载扭矩）
+                    response.q_exp[i] = request.q[i];
+                } else if (calibrated_positions[i] != -9999.0f) {
+                    // 已标定关节：保持标定位置
+                    response.q_exp[i] = calibrated_positions[i];
+                } else {
+                    // 未标定关节：跟随实际位置
+                    response.q_exp[i] = request.q[i];
+                }
                 response.dq_exp[i] = 0.0f;
                 response.tau_exp[i] = 0.0f;
             }
-            response.dq_exp[0] = -999.0f;  // 标定模式标志（电机卸力）
+            response.dq_exp[0] = -999.0f;  // 标定模式标志
+            response.tau_exp[0] = static_cast<float>(joint_id);  // 当前标定的关节ID
 
             memcpy(buf, &response, sizeof(response));
             sendto(sock_fd, buf, sizeof(response), 0, (struct sockaddr*)&addr, addr_len);
@@ -369,6 +384,12 @@ int main(int argc, char** argv) {
     // 标定数组
     float init_pos[10] = {0};
 
+    // 已标定位置数组（-9999.0表示未标定）
+    float calibrated_positions[10];
+    for (int i = 0; i < 10; i++) {
+        calibrated_positions[i] = -9999.0f;  // 未标定标志
+    }
+
     // 读取现有配置（如果存在）
     ifstream existing_yaml(output);
     if (existing_yaml.is_open()) {
@@ -394,10 +415,20 @@ int main(int argc, char** argv) {
 
     // 执行标定
     if (target_joint >= 0 && target_joint < 10) {
-        init_pos[target_joint] = calibrate_joint(target_joint, sock_fd, remote_addr, addr_len);
+        // 单关节标定
+        init_pos[target_joint] = calibrate_joint(target_joint, sock_fd, remote_addr, addr_len, calibrated_positions);
+        calibrated_positions[target_joint] = init_pos[target_joint];  // 更新已标定位置
     } else {
+        // 全部关节标定
         for (int i = 0; i < 10 && g_running; i++) {
-            init_pos[i] = calibrate_joint(i, sock_fd, remote_addr, addr_len);
+            init_pos[i] = calibrate_joint(i, sock_fd, remote_addr, addr_len, calibrated_positions);
+            calibrated_positions[i] = init_pos[i];  // 标定完成后立即更新，下一个关节时保持位置
+
+            if (i < 9 && g_running) {
+                cout << "\n按Enter继续标定下一个关节..." << endl;
+                cin.ignore();  // 清除输入缓冲
+                getchar();
+            }
         }
     }
 
