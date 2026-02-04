@@ -1,0 +1,83 @@
+# ==================== 构建产物 ====================
+build/
+cmake-build-*/
+out/
+bin/
+lib/
+
+# 编译中间文件
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+
+# 可执行文件（无扩展名）
+JetsonRLDeploy
+test_udp
+test_motors
+test_trt_engine
+calibration_tool
+
+# ==================== CMake ====================
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# ==================== 模型文件（通常很大） ====================
+*.engine
+*.onnx
+*.pt
+*.pth
+*.trt
+
+# ==================== Python ====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+venv/
+.venv/
+
+# ==================== IDE ====================
+# VS Code
+.vscode/
+
+# CLion / JetBrains
+.idea/
+*.iml
+
+# Visual Studio
+*.sln
+*.vcxproj*
+.vs/
+x64/
+x86/
+Debug/
+Release/
+
+# ==================== 系统文件 ====================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ==================== 项目特定 ====================
+# 标定文件（包含机器人特定配置）
+robot.yaml
+
+# 日志文件
+*.log
+
+# Claude Code 配置
+.claude/
+
+# 历史忽略项
+/**/.history
