@@ -65,20 +65,22 @@ volatile bool g_running = true;
  * @brief 信号处理函数
  */
 void signal_handler(int sig) {
-    cout << "\n收到信号 " << sig << ", 退出..." << endl;
+    cout << "\n收到信号 " << sig << ", 准备退出..." << endl;
     g_running = false;
 }
 
 /**
  * @brief 从YAML文件加载初始姿态
- *
- * @param filename YAML文件路径
- * @param init_pos 输出的初始位置数组
- * @return 成功返回true
  */
 bool load_init_pose(const string& filename, float init_pos[10]) {
     ifstream f(filename);
-    if (!f.is_open()) return false;
+    if (!f.is_open()) {
+        cerr << "警告: 无法打开配置文件 " << filename << endl;
+        cerr << "      将使用默认初始姿态" << endl;
+        return false;
+    }
+
+    cout << "正在读取配置文件: " << filename << " ... ";
 
     string line;
     int idx = 0;
@@ -94,26 +96,85 @@ bool load_init_pose(const string& filename, float init_pos[10]) {
             init_pos[idx++] = stof(val.substr(start));
         } catch (...) {}
     }
-    return idx == 10;
+
+    if (idx == 10) {
+        cout << "✓ 成功!" << endl;
+        return true;
+    } else {
+        cerr << "\n错误: 配置文件不完整，仅读取到 " << idx << " 个关节" << endl;
+        return false;
+    }
+}
+
+/**
+ * @brief 打印观测信息（39维）
+ */
+void print_observation(const MsgRequest& obs, int count) {
+    cout << "\n========== 观测信息 #" << count << " ==========" << endl;
+
+    // 角速度 (3维)
+    cout << "[角速度 omega] (rad/s)" << endl;
+    cout << "  ω_x = " << fixed << setprecision(4) << obs.omega[0] << endl;
+    cout << "  ω_y = " << obs.omega[1] << endl;
+    cout << "  ω_z = " << obs.omega[2] << endl;
+
+    // 欧拉角姿态 (3维)
+    cout << "[欧拉角 eu_ang] (rad)" << endl;
+    cout << "  Roll  = " << obs.eu_ang[0] << endl;
+    cout << "  Pitch = " << obs.eu_ang[1] << endl;
+    cout << "  Yaw   = " << obs.eu_ang[2] << endl;
+
+    // 控制指令 (4维)
+    cout << "[控制指令 command]" << endl;
+    cout << "  vx = " << obs.command[0] << ", vy = " << obs.command[1]
+         << ", yaw_rate = " << obs.command[2] << ", reserved = " << obs.command[3] << endl;
+
+    // 关节位置 (10维)
+    cout << "[关节位置 q] (rad)" << endl;
+    cout << "  左腿: [" << obs.q[0] << ", " << obs.q[1] << ", "
+         << obs.q[2] << ", " << obs.q[3] << ", " << obs.q[4] << "]" << endl;
+    cout << "  右腿: [" << obs.q[5] << ", " << obs.q[6] << ", "
+         << obs.q[7] << ", " << obs.q[8] << ", " << obs.q[9] << "]" << endl;
+
+    // 关节速度 (10维)
+    cout << "[关节速度 dq] (rad/s)" << endl;
+    cout << "  左腿: [" << obs.dq[0] << ", " << obs.dq[1] << ", "
+         << obs.dq[2] << ", " << obs.dq[3] << ", " << obs.dq[4] << "]" << endl;
+    cout << "  右腿: [" << obs.dq[5] << ", " << obs.dq[6] << ", "
+         << obs.dq[7] << ", " << obs.dq[8] << ", " << obs.dq[9] << "]" << endl;
+
+    // 上次动作 (10维)
+    cout << "[上次动作 last_action] (rad)" << endl;
+    cout << "  左腿: [" << obs.init_pos[0] << ", " << obs.init_pos[1] << ", "
+         << obs.init_pos[2] << ", " << obs.init_pos[3] << ", " << obs.init_pos[4] << "]" << endl;
+    cout << "  右腿: [" << obs.init_pos[5] << ", " << obs.init_pos[6] << ", "
+         << obs.init_pos[7] << ", " << obs.init_pos[8] << ", " << obs.init_pos[9] << "]" << endl;
+
+    // 加速度 (3维)
+    cout << "[加速度 acc] (g)" << endl;
+    cout << "  [" << obs.acc[0] << ", " << obs.acc[1] << ", " << obs.acc[2] << "]" << endl;
+
+    // 力矩 (10维)
+    cout << "[关节力矩 tau] (Nm)" << endl;
+    cout << "  左腿: [" << obs.tau[0] << ", " << obs.tau[1] << ", "
+         << obs.tau[2] << ", " << obs.tau[3] << ", " << obs.tau[4] << "]" << endl;
+    cout << "  右腿: [" << obs.tau[5] << ", " << obs.tau[6] << ", "
+         << obs.tau[7] << ", " << obs.tau[8] << ", " << obs.tau[9] << "]" << endl;
+
+    cout << "======================================" << endl;
 }
 
 /**
  * @brief 主函数
- *
- * @details 测试流程：
- *          1. 加载标定文件（可选）
- *          2. 创建UDP连接
- *          3. 等待ODroid连接
- *          4. 发送正弦波位置指令
- *
- *          正弦波参数：
- *          - 幅值: 0.5 rad (约28.6度)
- *          - 周期: 10秒
- *          - 公式: pos = init_pos + 0.5 * sin(2π/10 * t)
  */
 int main(int argc, char** argv) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+
+    cout << "========================================" << endl;
+    cout << "  Jetson完整数据流测试" << endl;
+    cout << "  功能: 发送正弦action，接收观测反馈" << endl;
+    cout << "========================================" << endl;
 
     // ========== 解析命令行参数 ==========
     string ip = "192.168.5.159";
@@ -127,19 +188,29 @@ int main(int argc, char** argv) {
         else if (arg == "--port" && i + 1 < argc) port = atoi(argv[++i]);
     }
 
-    // ========== 打印测试信息 ==========
-    cout << "========================================" << endl;
-    cout << "  电机控制测试 (正弦波)" << endl;
-    cout << "  目标: " << ip << ":" << port << endl;
-    cout << "========================================" << endl;
-
     // ========== 加载初始姿态 ==========
     float init_pos[10] = {0};
-    if (load_init_pose(yaml_file, init_pos)) {
-        cout << "已加载标定文件: " << yaml_file << endl;
+    bool yaml_loaded = load_init_pose(yaml_file, init_pos);
+
+    if (yaml_loaded) {
+        cout << "\n初始姿态配置 (从 " << yaml_file << "):" << endl;
+        cout << "  左腿: [";
+        for (int i = 0; i < 5; i++) {
+            cout << fixed << setprecision(3) << init_pos[i];
+            if (i < 4) cout << ", ";
+        }
+        cout << "]" << endl;
+        cout << "  右腿: [";
+        for (int i = 5; i < 10; i++) {
+            cout << init_pos[i];
+            if (i < 9) cout << ", ";
+        }
+        cout << "]" << endl;
     } else {
-        cout << "使用默认初始位置 (全零)" << endl;
+        cout << "\n使用默认初始姿态（未找到配置文件）" << endl;
+        cout << "提示: 运行 ./calibration_tool 进行标定" << endl;
     }
+    cout << "========================================" << endl;
 
     // ========== 创建UDP socket ==========
     int sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -162,7 +233,7 @@ int main(int argc, char** argv) {
     local_addr.sin_port = htons(port);
 
     if (bind(sock_fd, (struct sockaddr*)&local_addr, sizeof(local_addr)) < 0) {
-        cerr << "Bind失败!" << endl;
+        cerr << "Bind端口失败! 请检查端口" << port << "是否被占用" << endl;
         close(sock_fd);
         return 1;
     }
@@ -173,11 +244,20 @@ int main(int argc, char** argv) {
     remote_addr.sin_addr.s_addr = inet_addr(ip.c_str());
     remote_addr.sin_port = htons(port);
 
+    cout << "本地监听: 0.0.0.0:" << port << endl;
+    cout << "目标ODroid IP: " << ip << endl;
+    cout << "Request消息大小: " << sizeof(MsgRequest) << " bytes" << endl;
+    cout << "Response消息大小: " << sizeof(MsgResponse) << " bytes" << endl;
+    cout << "========================================" << endl;
+    cout << "正弦参数: 幅值=1.57rad (约90°), 周期=10秒" << endl;
+    cout << "说明: 正弦波 + 初始位置 = 电机目标位置" << endl;
+    cout << "========================================" << endl;
+    cout << "开始完整数据流测试，按Ctrl+C退出" << endl;
     cout << "等待ODroid连接..." << endl;
-    cout << "正弦参数: 幅值=0.5rad, 周期=10s" << endl;
+    cout << "========================================" << endl;
 
     // ========== 正弦波参数 ==========
-    const float amplitude = 0.5f;               // 幅值 0.5 rad
+    const float amplitude = 1.57f;              // 幅值 1.57 rad (约90度)
     const float period = 10.0f;                 // 周期 10秒
     const float omega = 2.0f * M_PI / period;   // 角频率
 
@@ -187,13 +267,18 @@ int main(int argc, char** argv) {
 
     socklen_t addr_len = sizeof(remote_addr);
     bool connected = false;
+    bool initialization_done = false;
 
     // 记录起始时间
     struct timeval start_tv;
     gettimeofday(&start_tv, NULL);
     uint64_t start_us = start_tv.tv_sec * 1000000ULL + start_tv.tv_usec;
+    uint64_t connection_time_us = 0;
+    uint64_t last_print_time_us = start_us;
 
-    int count = 0;
+    int send_count = 0;
+    int recv_count = 0;
+    int loop_count = 0;
 
     // ========== 主循环 ==========
     while (g_running) {
@@ -204,25 +289,80 @@ int main(int argc, char** argv) {
                         (struct sockaddr*)&remote_addr, &addr_len);
 
         if (n > 0) {
+            memcpy(&request, buf, sizeof(request));
+            recv_count++;
+
             // 首次收到数据，标记为已连接
             if (!connected) {
                 connected = true;
-                cout << "已连接，开始发送正弦波..." << endl;
-                // 重置起始时间
-                gettimeofday(&start_tv, NULL);
-                start_us = start_tv.tv_sec * 1000000ULL + start_tv.tv_usec;
+                char client_ip[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &remote_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+                cout << "\n收到ODroid连接: " << client_ip << ":"
+                     << ntohs(remote_addr.sin_port) << endl;
+                cout << "开始数据交互..." << endl;
+
+                // 记录连接时间
+                struct timeval conn_tv;
+                gettimeofday(&conn_tv, NULL);
+                connection_time_us = conn_tv.tv_sec * 1000000ULL + conn_tv.tv_usec;
+
+                cout << "\n等待2秒让机器人回到初始姿态..." << endl;
             }
-            memcpy(&request, buf, sizeof(request));
         }
 
-        // 计算当前时间
+        // 获取当前时间
         struct timeval now_tv;
         gettimeofday(&now_tv, NULL);
         uint64_t now_us = now_tv.tv_sec * 1000000ULL + now_tv.tv_usec;
-        float t = (now_us - start_us) / 1000000.0f;  // 转换为秒
 
-        // 计算正弦波值
+        // 检查初始化延迟（2秒）
+        if (connected && !initialization_done) {
+            uint64_t elapsed_since_connect = now_us - connection_time_us;
+            if (elapsed_since_connect >= 2000000) {
+                initialization_done = true;
+                cout << "✓ 初始化完成，开始正弦波测试..." << endl;
+                start_us = now_us;
+                last_print_time_us = now_us;
+            } else {
+                // 初始化期间，发送初始位置
+                for (int i = 0; i < 10; i++) {
+                    response.q_exp[i] = init_pos[i];
+                    response.dq_exp[i] = 0.0f;
+                    response.tau_exp[i] = 0.0f;
+                }
+
+                // 显示倒计时
+                float remaining_s = (2000000 - elapsed_since_connect) / 1000000.0f;
+                if ((int)(remaining_s * 10) % 5 == 0) {
+                    cout << "\r初始化中... " << fixed << setprecision(1)
+                         << remaining_s << "s      " << flush;
+                }
+
+                if (connected) {
+                    memcpy(buf, &response, sizeof(response));
+                    sendto(sock_fd, buf, sizeof(response), 0,
+                          (struct sockaddr*)&remote_addr, addr_len);
+                }
+
+                usleep(2000);
+                continue;
+            }
+        }
+
+        // 计算正弦波
+        float t = (now_us - start_us) / 1000000.0f;
         float sine_val = amplitude * sin(omega * t);
+
+        // 每500ms打印一次详细观测信息
+        if (initialization_done && now_us - last_print_time_us >= 500000) {
+            if (recv_count > 0) {
+                print_observation(request, recv_count);
+            }
+            cout << "[当前时间] t=" << fixed << setprecision(3) << t
+                 << "s, 目标位置=" << sine_val << " rad ("
+                 << (sine_val * 180.0 / M_PI) << " deg)" << endl;
+            last_print_time_us = now_us;
+        }
 
         // 设置所有关节的目标位置 = 初始位置 + 正弦波
         for (int i = 0; i < 10; i++) {
@@ -234,23 +374,33 @@ int main(int argc, char** argv) {
         // 发送响应
         if (connected) {
             memcpy(buf, &response, sizeof(response));
-            sendto(sock_fd, buf, sizeof(response), 0,
+            int send_num = sendto(sock_fd, buf, sizeof(response), 0,
                   (struct sockaddr*)&remote_addr, addr_len);
-            count++;
-
-            // 每0.5秒打印一次状态
-            if (count % 250 == 0) {
-                cout << "[t=" << fixed << setprecision(2) << t << "s] "
-                     << "sine=" << setprecision(4) << sine_val << " rad" << endl;
+            if (send_num > 0) {
+                send_count++;
             }
+        }
+
+        loop_count++;
+
+        // 每100个循环打印一个点
+        if (loop_count % 100 == 0) {
+            cout << "." << flush;
         }
 
         usleep(2000);  // 2ms, 500Hz
     }
 
     // ========== 打印统计信息 ==========
-    cout << "\n========================================" << endl;
-    cout << "测试结束 - 发送: " << count << " 包" << endl;
+    cout << "\n\n========================================" << endl;
+    cout << "测试结束" << endl;
+    cout << "总循环: " << loop_count << endl;
+    cout << "发送Action包: " << send_count << endl;
+    cout << "接收Obs包: " << recv_count << endl;
+    if (send_count > 0) {
+        cout << "丢包率: " << fixed << setprecision(2)
+             << (1.0 - (float)recv_count / send_count) * 100 << "%" << endl;
+    }
     cout << "========================================" << endl;
 
     close(sock_fd);
