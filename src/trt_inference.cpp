@@ -42,7 +42,8 @@ public:
  */
 TRTInference::TRTInference()
     : stream_(nullptr)          // CUDA流
-    , d_input_(nullptr)         // GPU输入缓冲区
+    , d_input_(nullptr)         // GPU输入缓冲区 - 当前观测
+    , d_obs_buf_(nullptr)       // GPU输入缓冲区 - 历史观测缓存
     , d_output_(nullptr)        // GPU输出缓冲区
     , cmd_x_(0), cmd_y_(0), cmd_rate_(0)  // 滤波后的控制指令
     , engine_loaded_(false) {   // 引擎未加载
@@ -50,6 +51,10 @@ TRTInference::TRTInference()
     std::fill(init_pos_, init_pos_ + DOF_NUM, 0.0f);
     // 初始化上次动作为全零
     std::fill(last_action_, last_action_ + ACTION_DIM, 0.0f);
+    // 初始化临时动作缓存为全零
+    std::fill(action_temp_, action_temp_ + ACTION_DIM, 0.0f);
+    // 初始化历史观测缓存为全零
+    std::fill(obs_buf_, obs_buf_ + HISTORY_LENGTH * OBS_DIM, 0.0f);
 }
 
 /**
@@ -61,8 +66,10 @@ TRTInference::TRTInference()
  *          TensorRT对象由unique_ptr自动管理
  */
 TRTInference::~TRTInference() {
-    // 释放GPU输入缓冲区
+    // 释放GPU输入缓冲区 - 当前观测
     if (d_input_) cudaFree(d_input_);
+    // 释放GPU输入缓冲区 - 历史观测缓存
+    if (d_obs_buf_) cudaFree(d_obs_buf_);
     // 释放GPU输出缓冲区
     if (d_output_) cudaFree(d_output_);
     // 销毁CUDA流
@@ -129,12 +136,18 @@ bool TRTInference::loadEngine(const std::string& engine_path) {
     cudaStreamCreate(&stream_);
 
     // ========== 步骤6: 分配GPU内存 ==========
-    // 输入缓冲区: 39个float (观测向量)
+    // 输入缓冲区1: 39个float (当前观测向量)
     cudaMalloc(&d_input_, OBS_DIM * sizeof(float));
+    // 输入缓冲区2: HISTORY_LENGTH * 39个float (历史观测缓存)
+    cudaMalloc(&d_obs_buf_, HISTORY_LENGTH * OBS_DIM * sizeof(float));
     // 输出缓冲区: 10个float (动作向量)
     cudaMalloc(&d_output_, ACTION_DIM * sizeof(float));
 
+    // 初始化历史观测缓存为全零
+    cudaMemset(d_obs_buf_, 0, HISTORY_LENGTH * OBS_DIM * sizeof(float));
+
     std::cout << "[TRT] Engine loaded: " << engine_path << std::endl;
+    std::cout << "[TRT] History length: " << HISTORY_LENGTH << std::endl;
     engine_loaded_ = true;
     return true;
 }
@@ -161,7 +174,13 @@ void TRTInference::setInitPose(const float* init_pos) {
  */
 void TRTInference::reset() {
     std::fill(last_action_, last_action_ + ACTION_DIM, 0.0f);
+    std::fill(action_temp_, action_temp_ + ACTION_DIM, 0.0f);
     cmd_x_ = cmd_y_ = cmd_rate_ = 0.0f;
+    // 重置历史观测缓存
+    std::fill(obs_buf_, obs_buf_ + HISTORY_LENGTH * OBS_DIM, 0.0f);
+    if (d_obs_buf_) {
+        cudaMemset(d_obs_buf_, 0, HISTORY_LENGTH * OBS_DIM * sizeof(float));
+    }
 }
 
 /**
@@ -234,9 +253,9 @@ void TRTInference::buildObservation(const MsgRequest& request, float* obs) {
         obs[idx++] = request.dq[i] * VEL_SCALE;
 
     // ========== [29-38] 上次动作 ==========
-    // 上一个控制周期输出的动作
+    // 上一个控制周期输出的动作（使用限幅后的值，与LibTorch版本一致）
     for (int i = 0; i < ACTION_DIM; ++i)
-        obs[idx++] = last_action_[i];
+        obs[idx++] = action_temp_[i];
 }
 
 /**
@@ -268,26 +287,29 @@ bool TRTInference::infer(const MsgRequest& request, float* action_out) {
     for (int i = 0; i < DOF_NUM; ++i)
         init_pos_[i] = request.init_pos[i];
 
-    // ========== 构建观测向量 ==========
+    // ========== 构建当前观测向量 ==========
     float obs[OBS_DIM];
     buildObservation(request, obs);
 
     // ========== 拷贝数据到GPU ==========
-    // 使用异步拷贝提高效率
+    // 拷贝当前观测到GPU
     cudaMemcpyAsync(d_input_, obs, OBS_DIM * sizeof(float), cudaMemcpyHostToDevice, stream_);
+    // 拷贝历史观测缓存到GPU
+    cudaMemcpyAsync(d_obs_buf_, obs_buf_, HISTORY_LENGTH * OBS_DIM * sizeof(float), cudaMemcpyHostToDevice, stream_);
 
     // ========== 执行TensorRT推理 ==========
+    // 模型输入：当前观测 [1, 39] + 历史观测缓存 [1, HISTORY_LENGTH, 39]
     // 根据TensorRT版本选择不同的API
-    // TensorRT 8.5+使用新的setTensorAddress/enqueueV3 API
-    // TensorRT 8.2-8.4使用旧的enqueueV2 API
 #if NV_TENSORRT_MAJOR >= 8 && NV_TENSORRT_MINOR >= 5
     // TensorRT 8.5+ 新API
     context_->setTensorAddress("input", d_input_);
+    context_->setTensorAddress("obs_buf", d_obs_buf_);
     context_->setTensorAddress("output", d_output_);
     context_->enqueueV3(stream_);
 #else
     // TensorRT 8.2-8.4 旧API
-    void* bindings[] = {d_input_, d_output_};
+    // bindings顺序需要与ONNX模型的输入输出顺序一致
+    void* bindings[] = {d_input_, d_obs_buf_, d_output_};
     context_->enqueueV2(bindings, stream_, nullptr);
 #endif
 
@@ -298,13 +320,24 @@ bool TRTInference::infer(const MsgRequest& request, float* action_out) {
     // 等待所有CUDA操作完成
     cudaStreamSynchronize(stream_);
 
+    // ========== 更新历史观测缓存（滑动窗口） ==========
+    // 移除最旧的观测，添加最新的观测
+    // obs_buf_布局: [obs_0, obs_1, ..., obs_{HISTORY_LENGTH-1}]
+    // 更新后: [obs_1, obs_2, ..., obs_{HISTORY_LENGTH-1}, obs_new]
+    for (int i = 0; i < (HISTORY_LENGTH - 1) * OBS_DIM; ++i) {
+        obs_buf_[i] = obs_buf_[i + OBS_DIM];
+    }
+    // 将当前观测添加到缓存末尾
+    for (int i = 0; i < OBS_DIM; ++i) {
+        obs_buf_[(HISTORY_LENGTH - 1) * OBS_DIM + i] = obs[i];
+    }
+
     // ========== 动作后处理 ==========
     for (int i = 0; i < ACTION_DIM; ++i) {
         // 动作滤波: 80%新动作 + 20%旧动作，使动作更平滑
         float blended = 0.8f * output[i] + 0.2f * last_action_[i];
 
         // 限幅: 将动作限制在[-15, 15]范围内
-        // 手动实现clamp以兼容C++14
         float clamped = blended < -15.0f ? -15.0f : (blended > 15.0f ? 15.0f : blended);
 
         // 输出动作
@@ -312,6 +345,9 @@ bool TRTInference::infer(const MsgRequest& request, float* action_out) {
 
         // 保存原始输出用于下次滤波
         last_action_[i] = output[i];
+
+        // 保存限幅后的值用于下次观测构建（与LibTorch版本一致）
+        action_temp_[i] = clamped;
     }
 
     return true;

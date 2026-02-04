@@ -25,8 +25,9 @@
  *          主要功能：
  *          1. 加载序列化的TensorRT引擎文件（.engine）
  *          2. 构建观测向量（39维）
- *          3. 执行GPU推理
- *          4. 输出动作向量（10维）
+ *          3. 维护历史观测缓存（用于时序模型）
+ *          4. 执行GPU推理（输入：当前观测 + 历史观测缓存）
+ *          5. 输出动作向量（10维）
  */
 class TRTInference {
 public:
@@ -126,7 +127,8 @@ private:
      * ============================================================
      */
     cudaStream_t stream_;   ///< CUDA流，用于异步操作
-    void* d_input_;         ///< GPU输入缓冲区（39个float）
+    void* d_input_;         ///< GPU输入缓冲区 - 当前观测（39个float）
+    void* d_obs_buf_;       ///< GPU输入缓冲区 - 历史观测缓存（HISTORY_LENGTH * 39个float）
     void* d_output_;        ///< GPU输出缓冲区（10个float）
 
     /*
@@ -136,7 +138,16 @@ private:
      */
     float init_pos_[DOF_NUM];       ///< 初始站立姿态（标定值）
     float last_action_[ACTION_DIM]; ///< 上次动作（用于观测和滤波）
+    float action_temp_[ACTION_DIM]; ///< 临时动作缓存（限幅后，用于观测构建）
     float cmd_x_, cmd_y_, cmd_rate_;///< 滤波后的控制指令
+
+    /*
+     * ============================================================
+     * 历史观测缓存（与LibTorch版本保持一致）
+     * ============================================================
+     */
+    static constexpr int HISTORY_LENGTH = 10;  ///< 历史缓存长度（帧数）
+    float obs_buf_[HISTORY_LENGTH * OBS_DIM];  ///< 历史观测缓存 [HISTORY_LENGTH, OBS_DIM]
 
     /*
      * ============================================================
