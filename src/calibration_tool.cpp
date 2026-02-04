@@ -22,11 +22,12 @@
 #include <fstream>
 #include <cstring>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <csignal>
-#include <termios.h>
+#include <cstdlib>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -82,8 +83,7 @@ const char* JOINT_NAMES[10] = {
  * ============================================================
  */
 volatile bool g_running = true;
-struct termios orig_termios;
-bool term_modified = false;
+bool terminal_modified = false;
 
 /**
  * @brief 信号处理函数
@@ -91,8 +91,11 @@ bool term_modified = false;
 void signal_handler(int sig) {
     cout << "\n\n收到信号 " << sig << ", 退出标定..." << endl;
     g_running = false;
-    if (term_modified) {
-        tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
+
+    // 恢复终端设置
+    if (terminal_modified) {
+        system("stty icanon echo");
+        terminal_modified = false;
     }
 }
 
@@ -100,22 +103,17 @@ void signal_handler(int sig) {
  * @brief 启用终端原始模式（非阻塞输入）
  */
 void enable_raw_mode() {
-    tcgetattr(STDIN_FILENO, &orig_termios);
-    struct termios raw = orig_termios;
-    raw.c_lflag &= ~(ICANON | ECHO);
-    raw.c_cc[VMIN] = 0;
-    raw.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-    term_modified = true;
+    system("stty -icanon -echo");
+    terminal_modified = true;
 }
 
 /**
  * @brief 恢复终端设置
  */
 void disable_raw_mode() {
-    if (term_modified) {
-        tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
-        term_modified = false;
+    if (terminal_modified) {
+        system("stty icanon echo");
+        terminal_modified = false;
     }
 }
 
@@ -224,10 +222,21 @@ float calibrate_joint(int joint_id, int sock_fd, struct sockaddr_in& addr, sockl
             update_count++;
         }
 
-        char ch;
-        if (read(STDIN_FILENO, &ch, 1) > 0) {
-            if (ch == '\n' || ch == '\r') break;
-            if (ch == 's' || ch == 'S') {
+        // 检查键盘输入（使用select实现非阻塞）
+        fd_set readfds;
+        struct timeval tv;
+        FD_ZERO(&readfds);
+        FD_SET(STDIN_FILENO, &readfds);
+        tv.tv_sec = 0;
+        tv.tv_usec = 1000;  // 1ms超时
+
+        if (select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv) > 0) {
+            char ch = getchar();
+            if (ch == '\n') {
+                // Enter键 - 确认标定
+                break;
+            } else if (ch == 's' || ch == 'S') {
+                // 跳过此关节
                 cout << "\n跳过标定，使用默认值 0.0 rad" << endl;
                 current_angle = 0.0f;
                 break;
