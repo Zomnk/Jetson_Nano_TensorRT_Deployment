@@ -82,26 +82,65 @@ bool load_init_pose(const string& filename, float init_pos[10]) {
 
     cout << "正在读取配置文件: " << filename << " ... ";
 
+    // 关节名称到索引的映射
+    // 左腿: yaw(0), roll(1), pitch(2), knee(3), ankle(4)
+    // 右腿: yaw(5), roll(6), pitch(7), knee(8), ankle(9)
+    bool in_left_leg = false;
+    bool in_right_leg = false;
+    int count = 0;
+
     string line;
-    int idx = 0;
-    while (getline(f, line) && idx < 10) {
-        size_t pos = line.find(':');
-        if (pos == string::npos) continue;
-        string val = line.substr(pos + 1);
-        size_t comment = val.find('#');
-        if (comment != string::npos) val = val.substr(0, comment);
-        size_t start = val.find_first_not_of(" \t");
-        if (start == string::npos) continue;
-        try {
-            init_pos[idx++] = stof(val.substr(start));
-        } catch (...) {}
+    while (getline(f, line)) {
+        // 跳过注释行
+        size_t first_char = line.find_first_not_of(" \t");
+        if (first_char != string::npos && line[first_char] == '#') continue;
+
+        // 检测当前在哪个腿的配置块
+        if (line.find("left_leg:") != string::npos) {
+            in_left_leg = true;
+            in_right_leg = false;
+            continue;
+        }
+        if (line.find("right_leg:") != string::npos) {
+            in_left_leg = false;
+            in_right_leg = true;
+            continue;
+        }
+
+        // 只在腿配置块内解析关节数据
+        if (!in_left_leg && !in_right_leg) continue;
+
+        int offset = in_left_leg ? 0 : 5;  // 左腿偏移0，右腿偏移5
+        int joint_idx = -1;
+
+        if (line.find("yaw:") != string::npos) joint_idx = 0;
+        else if (line.find("roll:") != string::npos) joint_idx = 1;
+        else if (line.find("pitch:") != string::npos) joint_idx = 2;
+        else if (line.find("knee:") != string::npos) joint_idx = 3;
+        else if (line.find("ankle:") != string::npos) joint_idx = 4;
+
+        if (joint_idx >= 0) {
+            size_t pos = line.find(':');
+            if (pos != string::npos) {
+                string val = line.substr(pos + 1);
+                size_t comment = val.find('#');
+                if (comment != string::npos) val = val.substr(0, comment);
+                size_t start = val.find_first_not_of(" \t");
+                if (start != string::npos) {
+                    try {
+                        init_pos[offset + joint_idx] = stof(val.substr(start));
+                        count++;
+                    } catch (...) {}
+                }
+            }
+        }
     }
 
-    if (idx == 10) {
+    if (count == 10) {
         cout << "✓ 成功!" << endl;
         return true;
     } else {
-        cerr << "\n错误: 配置文件不完整，仅读取到 " << idx << " 个关节" << endl;
+        cerr << "\n错误: 配置文件不完整，仅读取到 " << count << " 个关节" << endl;
         return false;
     }
 }
