@@ -54,7 +54,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${TENSORRT_LIBRARY}
     ${CUDA_LIBRARIES}
-    cudart
+    ${CUDA_cudart_static_LIBRARY}
 )
 
 # ============================================================
@@ -82,5 +82,5 @@ target_include_directories(test_trt_engine PRIVATE
 target_link_libraries(test_trt_engine PRIVATE
     ${TENSORRT_LIBRARY}
     ${CUDA_LIBRARIES}
-    cudart
+    ${CUDA_cudart_static_LIBRARY}
 )

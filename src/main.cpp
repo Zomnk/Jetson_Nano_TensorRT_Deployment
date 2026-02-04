@@ -20,6 +20,7 @@
 #include "trt_inference.h"
 #include <iostream>
 #include <fstream>
+#include <cstring>
 #include <csignal>
 #include <unistd.h>
 
