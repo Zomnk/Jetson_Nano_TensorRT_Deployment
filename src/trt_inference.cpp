@@ -282,10 +282,8 @@ bool TRTInference::infer(const MsgRequest& request, float* action_out) {
     // 检查触发标志，只有trigger=1.0时才执行推理
     if (request.trigger != 1.0f) return false;
 
-    // ========== 更新初始位置 ==========
-    // 从请求消息中获取最新的初始姿态
-    for (int i = 0; i < DOF_NUM; ++i)
-        init_pos_[i] = request.init_pos[i];
+    // 注意: init_pos_ 仅在启动时通过 setInitPose() 从 robot.yaml 加载
+    // 不再从 request.init_pos 动态更新，确保使用标定值
 
     // ========== 构建当前观测向量 ==========
     float obs[OBS_DIM];
