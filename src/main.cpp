@@ -22,6 +22,7 @@
 #include <fstream>
 #include <cstring>
 #include <csignal>
+#include <cmath>
 #include <unistd.h>
 
 /*
@@ -264,6 +265,12 @@ int main(int argc, char** argv) {
     MsgResponse response;
     std::memset(&response, 0, sizeof(response));
 
+    // ========== 问题1: 用init_pos初始化response ==========
+    // 避免第一个数据包发送零位置指令
+    for (int i = 0; i < ACTION_DIM; ++i) {
+        response.q_exp[i] = calibrated_init_pos[i];
+    }
+
     int loop_count = 0;   // 循环计数
     int infer_count = 0;  // 推理计数
 
@@ -277,8 +284,22 @@ int main(int argc, char** argv) {
             float action[ACTION_DIM];
 
             // 执行推理
-            if (inference.infer(request, action)) {
-                // 将推理结果填入响应
+            bool infer_success = inference.infer(request, action);
+
+            // ========== 问题4: 检查输出中是否有NaN ==========
+            bool has_nan = false;
+            if (infer_success) {
+                for (int i = 0; i < ACTION_DIM; ++i) {
+                    if (std::isnan(action[i])) {
+                        has_nan = true;
+                        break;
+                    }
+                }
+            }
+
+            // ========== 问题2,3: 推理失败或trigger!=1.0时的处理 ==========
+            if (infer_success && !has_nan) {
+                // 推理成功且无NaN，使用推理结果
                 for (int i = 0; i < ACTION_DIM; ++i) {
                     response.q_exp[i] = action[i];
                 }
@@ -291,6 +312,19 @@ int main(int argc, char** argv) {
                         std::cout << action[i] << " ";
                     }
                     std::cout << std::endl;
+                }
+            } else {
+                // 推理失败、trigger!=1.0或输出有NaN，平滑过渡到init_pos
+                // 使用低通滤波实现平滑过渡，避免震荡
+                const float smooth_factor = 0.1f;  // 平滑系数
+                for (int i = 0; i < ACTION_DIM; ++i) {
+                    response.q_exp[i] = response.q_exp[i] * (1.0f - smooth_factor) +
+                                       calibrated_init_pos[i] * smooth_factor;
+                }
+
+                // 如果有NaN，打印警告
+                if (has_nan) {
+                    std::cout << "[警告] 推理输出包含NaN，已切换到默认动作" << std::endl;
                 }
             }
         }
