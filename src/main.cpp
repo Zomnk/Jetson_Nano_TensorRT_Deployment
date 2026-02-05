@@ -19,6 +19,7 @@
 #include "communication.h"
 #include "trt_inference.h"
 #include <iostream>
+#include <iomanip>
 #include <fstream>
 #include <cstring>
 #include <csignal>
