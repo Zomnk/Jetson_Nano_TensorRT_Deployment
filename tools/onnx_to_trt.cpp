@@ -12,6 +12,7 @@
  */
 
 #include <NvInfer.h>
+#include <NvInferVersion.h>  // 用于版本检测
 #include <NvOnnxParser.h>
 #include <fstream>
 #include <iostream>
@@ -97,7 +98,12 @@ bool convertOnnxToTrt(const std::string& onnx_path,
     }
 
     // 设置工作空间大小 (1GB)
+    // TensorRT 8.4+ 使用 setMemoryPoolLimit，旧版本使用 setMaxWorkspaceSize
+#if NV_TENSORRT_MAJOR >= 8 && NV_TENSORRT_MINOR >= 4
     config->setMemoryPoolLimit(MemoryPoolType::kWORKSPACE, 1ULL << 30);
+#else
+    config->setMaxWorkspaceSize(1ULL << 30);
+#endif
 
     // FP16模式
     if (use_fp16) {
