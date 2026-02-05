@@ -219,8 +219,12 @@ int main(int argc, char** argv) {
     }
 
     // ========== 注册信号处理函数 ==========
-    signal(SIGINT, signalHandler);   // Ctrl+C
-    signal(SIGTERM, signalHandler);  // kill命令
+    struct sigaction sa;
+    std::memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = signalHandler;
+    sa.sa_flags = 0;  // 不使用 SA_RESTART，允许阻塞调用被中断
+    sigaction(SIGINT, &sa, nullptr);   // Ctrl+C
+    sigaction(SIGTERM, &sa, nullptr);  // kill命令
 
     // ========== 打印启动信息 ==========
     std::cout << "========================================" << std::endl;
