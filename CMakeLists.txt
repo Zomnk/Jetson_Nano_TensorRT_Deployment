@@ -72,6 +72,9 @@ target_include_directories(test_udp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_executable(test_motors test/test_motors.cpp)
 target_include_directories(test_motors PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+add_executable(test_init_pose test/test_init_pose.cpp)
+target_include_directories(test_init_pose PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 # TensorRT模型测试
 add_executable(test_trt_engine test/test_trt_engine.cpp)
 target_include_directories(test_trt_engine PRIVATE
