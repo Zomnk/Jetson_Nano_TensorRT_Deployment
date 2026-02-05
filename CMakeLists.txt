@@ -84,3 +84,25 @@ target_link_libraries(test_trt_engine PRIVATE
     ${CUDA_LIBRARIES}
     ${CUDA_cudart_static_LIBRARY}
 )
+
+# ============================================================
+# ONNX转TensorRT工具
+# ============================================================
+find_library(NVONNXPARSER_LIBRARY nvonnxparser
+    HINTS ${TENSORRT_ROOT}/lib ${TENSORRT_ROOT}/lib64 /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu)
+
+if(NVONNXPARSER_LIBRARY)
+    message(STATUS "nvonnxparser library: ${NVONNXPARSER_LIBRARY}")
+    add_executable(onnx_to_trt tools/onnx_to_trt.cpp)
+    target_include_directories(onnx_to_trt PRIVATE
+        ${CUDA_INCLUDE_DIRS}
+        ${TENSORRT_INCLUDE_DIR}
+    )
+    target_link_libraries(onnx_to_trt PRIVATE
+        ${TENSORRT_LIBRARY}
+        ${NVONNXPARSER_LIBRARY}
+        ${CUDA_LIBRARIES}
+    )
+else()
+    message(WARNING "nvonnxparser not found, onnx_to_trt will not be built")
+endif()
