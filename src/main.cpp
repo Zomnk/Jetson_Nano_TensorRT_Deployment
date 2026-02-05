@@ -327,7 +327,7 @@ int main(int argc, char** argv) {
 
                     std::cout << "                动作: ";
                     for (int i = 0; i < ACTION_DIM; ++i) {
-                        std::cout << action[i] << " ";
+                        std::cout << response.q_exp[i] << " ";
                     }
                     std::cout << std::endl;
                 }
