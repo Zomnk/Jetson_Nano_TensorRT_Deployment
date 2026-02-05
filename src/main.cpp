@@ -278,6 +278,7 @@ int main(int argc, char** argv) {
 
     int loop_count = 0;   // 循环计数
     int infer_count = 0;  // 推理计数
+    float last_action[ACTION_DIM] = {0};  // 上一步的action，用于滤波
 
     // ========== 主控制循环 ==========
     while (g_running) {
@@ -306,11 +307,18 @@ int main(int argc, char** argv) {
             if (infer_success && !has_nan) {
                 // 推理成功且无NaN，使用推理结果
                 for (int i = 0; i < ACTION_DIM; ++i) {
-                    // 限制action范围在 [-5, 5]
-                    float clamped = action[i];
-                    if (clamped < -5.0f) clamped = -5.0f;
-                    if (clamped > 5.0f) clamped = 5.0f;
-                    response.q_exp[i] = clamped;
+                    // 应用滤波: 0.8*current_action + 0.2*last_action
+                    float filtered = 0.8f * action[i] + 0.2f * last_action[i];
+
+                    // 转换为电机指令: action = action_flt * 0.25 + init_pos
+                    float motor_cmd = filtered * 0.25f + calibrated_init_pos[i];
+
+                    // 限制范围
+                    if (motor_cmd < -5.0f) motor_cmd = -5.0f;
+                    if (motor_cmd > 5.0f) motor_cmd = 5.0f;
+
+                    response.q_exp[i] = motor_cmd;
+                    last_action[i] = action[i];  // 保存原始action用于下一次滤波
                 }
                 infer_count++;
 
