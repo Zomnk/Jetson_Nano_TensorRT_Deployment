@@ -159,7 +159,7 @@ int main(int argc, char** argv) {
     // 使用随机数填充输入
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    std::uniform_real_distribution<float> dist(-0.1f, 0.1f);
     for (int i = 0; i < PROP_DIM; i++) {
         input_prop[i] = dist(gen);
     }
