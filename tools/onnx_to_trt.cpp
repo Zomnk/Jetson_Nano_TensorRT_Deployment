@@ -168,6 +168,7 @@ bool convertOnnxToTrt(const std::string& onnx_path,
         }
     } else {
         std::cout << "使用FP32精度" << std::endl;
+        config->clearFlag(BuilderFlag::kFP16);  // 显式禁用FP16
     }
 
     // ========== 6. 构建引擎 ==========
