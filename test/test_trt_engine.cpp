@@ -156,23 +156,27 @@ int main(int argc, char** argv) {
     std::vector<float> input_prop(PROP_DIM);
     std::vector<float> input_history(HISTORY_DIM);
 
-    // 使用随机数填充输入
+    // 使用随机数填充 proprioception
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dist(-0.1f, 0.1f);
     for (int i = 0; i < PROP_DIM; i++) {
         input_prop[i] = dist(gen);
     }
-    for (int i = 0; i < HISTORY_DIM; i++) {
-        input_history[i] = dist(gen);
+
+    // 用相同的 proprioception 数据填充整个 history（模拟连续的观测）
+    for (int h = 0; h < HISTORY_LEN; h++) {
+        std::copy(input_prop.begin(), input_prop.end(),
+                  input_history.begin() + h * PROP_DIM);
     }
 
-    // 打印输入的前5个值
-    std::cout << "proprioception前5个值: ";
-    for (int i = 0; i < 5; i++) {
-        std::cout << std::fixed << std::setprecision(4) << input_prop[i] << " ";
+    // 打印完整的 proprioception（39维）
+    std::cout << "proprioception (39维): ";
+    for (int i = 0; i < PROP_DIM; i++) {
+        std::cout << std::fixed << std::setprecision(4) << input_prop[i];
+        if (i < PROP_DIM - 1) std::cout << " ";
     }
-    std::cout << "..." << std::endl;
+    std::cout << std::endl;
 
     // ========== 分配GPU内存 ==========
     void* d_prop;
