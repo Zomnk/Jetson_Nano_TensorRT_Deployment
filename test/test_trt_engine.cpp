@@ -204,7 +204,7 @@ int main(int argc, char** argv) {
 #if NV_TENSORRT_MAJOR >= 8 && NV_TENSORRT_MINOR >= 5
         context->setTensorAddress("proprioception", d_prop);
         context->setTensorAddress("history", d_history);
-        context->setTensorAddress("output", d_output);
+        context->setTensorAddress("actions", d_output);
         context->enqueueV3(stream);
 #else
         void* bindings[] = {d_prop, d_history, d_output};
@@ -220,7 +220,7 @@ int main(int argc, char** argv) {
 #if NV_TENSORRT_MAJOR >= 8 && NV_TENSORRT_MINOR >= 5
         context->setTensorAddress("proprioception", d_prop);
         context->setTensorAddress("history", d_history);
-        context->setTensorAddress("output", d_output);
+        context->setTensorAddress("actions", d_output);
         context->enqueueV3(stream);
 #else
         void* bindings[] = {d_prop, d_history, d_output};

@@ -296,17 +296,19 @@ bool TRTInference::infer(const MsgRequest& request, float* action_out) {
     cudaMemcpyAsync(d_obs_buf_, obs_buf_, HISTORY_LENGTH * OBS_DIM * sizeof(float), cudaMemcpyHostToDevice, stream_);
 
     // ========== 执行TensorRT推理 ==========
-    // 模型输入：当前观测 [1, 39] + 历史观测缓存 [1, HISTORY_LENGTH, 39]
+    // 模型输入：proprioception [1, 39] + history [1, HISTORY_LENGTH, 39]
+    // 模型输出：actions [1, 10]
     // 根据TensorRT版本选择不同的API
 #if NV_TENSORRT_MAJOR >= 8 && NV_TENSORRT_MINOR >= 5
     // TensorRT 8.5+ 新API
-    context_->setTensorAddress("input", d_input_);
-    context_->setTensorAddress("obs_buf", d_obs_buf_);
-    context_->setTensorAddress("output", d_output_);
+    context_->setTensorAddress("proprioception", d_input_);
+    context_->setTensorAddress("history", d_obs_buf_);
+    context_->setTensorAddress("actions", d_output_);
     context_->enqueueV3(stream_);
 #else
     // TensorRT 8.2-8.4 旧API
     // bindings顺序需要与ONNX模型的输入输出顺序一致
+    // [0] proprioception, [1] history, [2] actions
     void* bindings[] = {d_input_, d_obs_buf_, d_output_};
     context_->enqueueV2(bindings, stream_, nullptr);
 #endif
