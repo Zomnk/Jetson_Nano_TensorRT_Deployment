@@ -144,38 +144,51 @@ int main(int argc, char** argv) {
 #endif
 
     // ========== 创建测试输入 ==========
-    const int INPUT_DIM = 39;   // 观测维度
-    const int OUTPUT_DIM = 10;  // 动作维度
+    const int PROP_DIM = 39;           // proprioception 维度
+    const int HISTORY_LEN = 10;        // history 长度
+    const int HISTORY_DIM = HISTORY_LEN * PROP_DIM;  // history 总维度 = 10 * 39 = 390
+    const int OUTPUT_DIM = 10;         // 动作维度
 
-    std::cout << "\n创建测试输入 (1, " << INPUT_DIM << ")..." << std::endl;
-    std::vector<float> input(INPUT_DIM);
+    std::cout << "\n创建测试输入..." << std::endl;
+    std::cout << "  proprioception: [1, " << PROP_DIM << "]" << std::endl;
+    std::cout << "  history: [1, " << HISTORY_LEN << ", " << PROP_DIM << "]" << std::endl;
+
+    std::vector<float> input_prop(PROP_DIM);
+    std::vector<float> input_history(HISTORY_DIM);
 
     // 使用随机数填充输入
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-    for (int i = 0; i < INPUT_DIM; i++) {
-        input[i] = dist(gen);
+    for (int i = 0; i < PROP_DIM; i++) {
+        input_prop[i] = dist(gen);
+    }
+    for (int i = 0; i < HISTORY_DIM; i++) {
+        input_history[i] = dist(gen);
     }
 
     // 打印输入的前5个值
-    std::cout << "输入前5个值: ";
+    std::cout << "proprioception前5个值: ";
     for (int i = 0; i < 5; i++) {
-        std::cout << std::fixed << std::setprecision(4) << input[i] << " ";
+        std::cout << std::fixed << std::setprecision(4) << input_prop[i] << " ";
     }
     std::cout << "..." << std::endl;
 
     // ========== 分配GPU内存 ==========
-    void* d_input;
+    void* d_prop;
+    void* d_history;
     void* d_output;
-    cudaMalloc(&d_input, INPUT_DIM * sizeof(float));
+    cudaMalloc(&d_prop, PROP_DIM * sizeof(float));
+    cudaMalloc(&d_history, HISTORY_DIM * sizeof(float));
     cudaMalloc(&d_output, OUTPUT_DIM * sizeof(float));
 
     cudaStream_t stream;
     cudaStreamCreate(&stream);
 
     // 拷贝输入到GPU
-    cudaMemcpyAsync(d_input, input.data(), INPUT_DIM * sizeof(float),
+    cudaMemcpyAsync(d_prop, input_prop.data(), PROP_DIM * sizeof(float),
+                    cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(d_history, input_history.data(), HISTORY_DIM * sizeof(float),
                     cudaMemcpyHostToDevice, stream);
 
     // ========== 执行推理 ==========
@@ -189,11 +202,12 @@ int main(int argc, char** argv) {
     // 预热（执行10次推理，不计时）
     for (int i = 0; i < 10; i++) {
 #if NV_TENSORRT_MAJOR >= 8 && NV_TENSORRT_MINOR >= 5
-        context->setTensorAddress("input", d_input);
+        context->setTensorAddress("proprioception", d_prop);
+        context->setTensorAddress("history", d_history);
         context->setTensorAddress("output", d_output);
         context->enqueueV3(stream);
 #else
-        void* bindings[] = {d_input, d_output};
+        void* bindings[] = {d_prop, d_history, d_output};
         context->enqueueV2(bindings, stream, nullptr);
 #endif
     }
@@ -204,11 +218,12 @@ int main(int argc, char** argv) {
     cudaEventRecord(start, stream);
     for (int i = 0; i < iterations; i++) {
 #if NV_TENSORRT_MAJOR >= 8 && NV_TENSORRT_MINOR >= 5
-        context->setTensorAddress("input", d_input);
+        context->setTensorAddress("proprioception", d_prop);
+        context->setTensorAddress("history", d_history);
         context->setTensorAddress("output", d_output);
         context->enqueueV3(stream);
 #else
-        void* bindings[] = {d_input, d_output};
+        void* bindings[] = {d_prop, d_history, d_output};
         context->enqueueV2(bindings, stream, nullptr);
 #endif
     }
@@ -238,7 +253,8 @@ int main(int argc, char** argv) {
     }
 
     // ========== 清理资源 ==========
-    cudaFree(d_input);
+    cudaFree(d_prop);
+    cudaFree(d_history);
     cudaFree(d_output);
     cudaStreamDestroy(stream);
     cudaEventDestroy(start);
