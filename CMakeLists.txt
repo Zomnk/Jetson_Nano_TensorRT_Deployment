@@ -88,6 +88,19 @@ target_link_libraries(test_trt_engine PRIVATE
     ${CUDA_cudart_static_LIBRARY}
 )
 
+# TensorRT模型CSV对比测试
+add_executable(test_trt_engine_csv test/test_trt_engine_csv.cpp)
+target_include_directories(test_trt_engine_csv PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CUDA_INCLUDE_DIRS}
+    ${TENSORRT_INCLUDE_DIR}
+)
+target_link_libraries(test_trt_engine_csv PRIVATE
+    ${TENSORRT_LIBRARY}
+    ${CUDA_LIBRARIES}
+    ${CUDA_cudart_static_LIBRARY}
+)
+
 # ============================================================
 # ONNX转TensorRT工具
 # ============================================================

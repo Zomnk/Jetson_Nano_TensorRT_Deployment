@@ -23,6 +23,7 @@
 #include <vector>
 #include <random>
 #include <iomanip>
+#include <sstream>
 
 /**
  * @brief TensorRT日志记录器
