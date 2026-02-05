@@ -97,6 +97,59 @@ bool convertOnnxToTrt(const std::string& onnx_path,
         return false;
     }
 
+    // ========== 5.1 创建Optimization Profile (处理动态维度) ==========
+    IOptimizationProfile* profile = builder->createOptimizationProfile();
+    if (!profile) {
+        std::cerr << "创建OptimizationProfile失败" << std::endl;
+        return false;
+    }
+
+    // 为每个输入设置动态维度范围
+    for (int i = 0; i < network->getNbInputs(); ++i) {
+        auto input = network->getInput(i);
+        const char* name = input->getName();
+        Dims dims = input->getDimensions();
+
+        // 创建最小、最优、最大维度
+        Dims minDims = dims;
+        Dims optDims = dims;
+        Dims maxDims = dims;
+
+        // 将动态维度(-1)替换为具体值
+        // 最小=1, 最优=1, 最大=1 (因为推理时batch=1)
+        for (int j = 0; j < dims.nbDims; ++j) {
+            if (dims.d[j] == -1) {
+                minDims.d[j] = 1;
+                optDims.d[j] = 1;
+                maxDims.d[j] = 1;
+            }
+        }
+
+        std::cout << "设置输入 '" << name << "' 的优化配置: ";
+        std::cout << "min=[";
+        for (int j = 0; j < minDims.nbDims; ++j) {
+            std::cout << minDims.d[j];
+            if (j < minDims.nbDims - 1) std::cout << ",";
+        }
+        std::cout << "], opt=[";
+        for (int j = 0; j < optDims.nbDims; ++j) {
+            std::cout << optDims.d[j];
+            if (j < optDims.nbDims - 1) std::cout << ",";
+        }
+        std::cout << "], max=[";
+        for (int j = 0; j < maxDims.nbDims; ++j) {
+            std::cout << maxDims.d[j];
+            if (j < maxDims.nbDims - 1) std::cout << ",";
+        }
+        std::cout << "]" << std::endl;
+
+        profile->setDimensions(name, OptProfileSelector::kMIN, minDims);
+        profile->setDimensions(name, OptProfileSelector::kOPT, optDims);
+        profile->setDimensions(name, OptProfileSelector::kMAX, maxDims);
+    }
+
+    config->addOptimizationProfile(profile);
+
     // 设置工作空间大小 (1GB)
     // TensorRT 8.4+ 使用 setMemoryPoolLimit，旧版本使用 setMaxWorkspaceSize
 #if NV_TENSORRT_MAJOR >= 8 && NV_TENSORRT_MINOR >= 4
