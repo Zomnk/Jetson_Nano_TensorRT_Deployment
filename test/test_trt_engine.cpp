@@ -156,12 +156,9 @@ int main(int argc, char** argv) {
     std::vector<float> input_prop(PROP_DIM);
     std::vector<float> input_history(HISTORY_DIM);
 
-    // 使用随机数填充 proprioception
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dist(-0.1f, 0.1f);
+    // 将所有观测量设置为 0
     for (int i = 0; i < PROP_DIM; i++) {
-        input_prop[i] = dist(gen);
+        input_prop[i] = 0.0f;
     }
 
     // 用相同的 proprioception 数据填充整个 history（模拟连续的观测）
