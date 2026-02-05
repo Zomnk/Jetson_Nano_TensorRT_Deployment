@@ -286,7 +286,7 @@ int main(int argc, char** argv) {
             // 执行推理
             bool infer_success = inference.infer(request, action);
 
-            // ========== 问题4: 检查输出中是否有NaN ==========
+            // ========== 检查输出中是否有NaN ==========
             bool has_nan = false;
             if (infer_success) {
                 for (int i = 0; i < ACTION_DIM; ++i) {
@@ -297,7 +297,7 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // ========== 问题2,3: 推理失败或trigger!=1.0时的处理 ==========
+            // ========== 推理失败、trigger!=1.0或输出有NaN时的处理 ==========
             if (infer_success && !has_nan) {
                 // 推理成功且无NaN，使用推理结果
                 for (int i = 0; i < ACTION_DIM; ++i) {
@@ -314,18 +314,24 @@ int main(int argc, char** argv) {
                     std::cout << std::endl;
                 }
             } else {
-                // 推理失败、trigger!=1.0或输出有NaN，平滑过渡到init_pos
-                // 使用低通滤波实现平滑过渡，避免震荡
-                const float smooth_factor = 0.1f;  // 平滑系数
-                for (int i = 0; i < ACTION_DIM; ++i) {
-                    response.q_exp[i] = response.q_exp[i] * (1.0f - smooth_factor) +
-                                       calibrated_init_pos[i] * smooth_factor;
+                // 推理失败、trigger!=1.0或输出有NaN，终止推理并回到初始姿态
+                if (has_nan) {
+                    std::cout << "\n[错误] 推理输出包含NaN，终止推理" << std::endl;
+                } else if (!infer_success) {
+                    std::cout << "\n[错误] 推理失败或trigger!=1.0，终止推理" << std::endl;
                 }
 
-                // 如果有NaN，打印警告
-                if (has_nan) {
-                    std::cout << "[警告] 推理输出包含NaN，已切换到默认动作" << std::endl;
+                std::cout << "正在回到初始姿态..." << std::endl;
+                moveToInitPose(udp, calibrated_init_pos);
+
+                // 重新初始化response
+                std::memset(&response, 0, sizeof(response));
+                for (int i = 0; i < ACTION_DIM; ++i) {
+                    response.q_exp[i] = calibrated_init_pos[i];
                 }
+
+                std::cout << "已回到初始姿态，重新开始控制循环" << std::endl;
+                std::cout << "========================================" << std::endl;
             }
         }
 
