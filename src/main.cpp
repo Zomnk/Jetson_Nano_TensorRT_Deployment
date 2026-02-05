@@ -305,7 +305,11 @@ int main(int argc, char** argv) {
             if (infer_success && !has_nan) {
                 // 推理成功且无NaN，使用推理结果
                 for (int i = 0; i < ACTION_DIM; ++i) {
-                    response.q_exp[i] = action[i];
+                    // 限制action范围在 [-1.57, 1.57]
+                    float clamped = action[i];
+                    if (clamped < -1.57f) clamped = -1.57f;
+                    if (clamped > 1.57f) clamped = 1.57f;
+                    response.q_exp[i] = clamped;
                 }
                 infer_count++;
 
