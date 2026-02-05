@@ -305,10 +305,10 @@ int main(int argc, char** argv) {
             if (infer_success && !has_nan) {
                 // 推理成功且无NaN，使用推理结果
                 for (int i = 0; i < ACTION_DIM; ++i) {
-                    // 限制action范围在 [-1.57, 1.57]
+                    // 限制action范围在 [-5, 5]
                     float clamped = action[i];
-                    if (clamped < -1.57f) clamped = -1.57f;
-                    if (clamped > 1.57f) clamped = 1.57f;
+                    if (clamped < -5.0f) clamped = -5.0f;
+                    if (clamped > 5.0f) clamped = 5.0f;
                     response.q_exp[i] = clamped;
                 }
                 infer_count++;
@@ -319,13 +319,35 @@ int main(int argc, char** argv) {
                     float obs[OBS_DIM];
                     inference.getLastObservation(obs);
 
-                    std::cout << "[推理 #" << infer_count << "] 观测: ";
-                    for (int i = 0; i < OBS_DIM; ++i) {
-                        std::cout << obs[i] << " ";
+                    std::cout << "[推理 #" << infer_count << "]" << std::endl;
+
+                    // 打印观测值（39维）
+                    std::cout << "  角速度: w_x=" << std::fixed << std::setprecision(6) << obs[0]
+                              << " w_y=" << obs[1] << " w_z=" << obs[2] << std::endl;
+
+                    std::cout << "  欧拉角: roll=" << obs[3] << " pitch=" << obs[4] << " yaw=" << obs[5] << std::endl;
+
+                    std::cout << "  控制指令: cmd_vx=" << obs[6] << " cmd_vy=" << obs[7] << " cmd_dyaw=" << obs[8] << std::endl;
+
+                    std::cout << "  关节位置: ";
+                    for (int i = 0; i < 10; i++) {
+                        std::cout << obs[9 + i] << " ";
                     }
                     std::cout << std::endl;
 
-                    std::cout << "                动作: ";
+                    std::cout << "  关节速度: ";
+                    for (int i = 0; i < 10; i++) {
+                        std::cout << obs[19 + i] << " ";
+                    }
+                    std::cout << std::endl;
+
+                    std::cout << "  上一步动作: ";
+                    for (int i = 0; i < 10; i++) {
+                        std::cout << obs[29 + i] << " ";
+                    }
+                    std::cout << std::endl;
+
+                    std::cout << "  动作输出: ";
                     for (int i = 0; i < ACTION_DIM; ++i) {
                         std::cout << response.q_exp[i] << " ";
                     }
