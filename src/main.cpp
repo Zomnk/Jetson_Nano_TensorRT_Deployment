@@ -307,7 +307,17 @@ int main(int argc, char** argv) {
 
                 // 每0.5秒打印一次状态（250次 × 2ms = 500ms）
                 if (infer_count % 250 == 0) {
-                    std::cout << "[推理 #" << infer_count << "] 动作: ";
+                    // 获取观测向量
+                    float obs[OBS_DIM];
+                    inference.getLastObservation(obs);
+
+                    std::cout << "[推理 #" << infer_count << "] 观测: ";
+                    for (int i = 0; i < OBS_DIM; ++i) {
+                        std::cout << obs[i] << " ";
+                    }
+                    std::cout << std::endl;
+
+                    std::cout << "                动作: ";
                     for (int i = 0; i < ACTION_DIM; ++i) {
                         std::cout << action[i] << " ";
                     }

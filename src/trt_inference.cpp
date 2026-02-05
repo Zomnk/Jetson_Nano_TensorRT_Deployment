@@ -55,6 +55,8 @@ TRTInference::TRTInference()
     std::fill(action_temp_, action_temp_ + ACTION_DIM, 0.0f);
     // 初始化历史观测缓存为全零
     std::fill(obs_buf_, obs_buf_ + HISTORY_LENGTH * OBS_DIM, 0.0f);
+    // 初始化最后一次观测为全零
+    std::fill(last_obs_, last_obs_ + OBS_DIM, 0.0f);
 }
 
 /**
@@ -353,5 +355,15 @@ bool TRTInference::infer(const MsgRequest& request, float* action_out) {
         action_temp_[i] = clamped;
     }
 
+    // 保存观测向量用于调试输出
+    std::copy(obs, obs + OBS_DIM, last_obs_);
+
     return true;
+}
+
+/**
+ * @brief 获取最后一次的观测向量
+ */
+void TRTInference::getLastObservation(float* obs) const {
+    std::copy(last_obs_, last_obs_ + OBS_DIM, obs);
 }

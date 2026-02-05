@@ -88,6 +88,12 @@ public:
      */
     bool infer(const MsgRequest& request, float* action_out);
 
+    /**
+     * @brief 获取最后一次的观测向量
+     * @param obs 输出的观测数组（39维）
+     */
+    void getLastObservation(float* obs) const;
+
 private:
     /**
      * @brief 构建观测向量
@@ -140,6 +146,7 @@ private:
     float last_action_[ACTION_DIM]; ///< 上次动作（用于观测和滤波）
     float action_temp_[ACTION_DIM]; ///< 临时动作缓存（限幅后，用于观测构建）
     float cmd_x_, cmd_y_, cmd_rate_;///< 滤波后的控制指令
+    float last_obs_[OBS_DIM];       ///< 最后一次的观测向量（用于调试输出）
 
     /*
      * ============================================================
