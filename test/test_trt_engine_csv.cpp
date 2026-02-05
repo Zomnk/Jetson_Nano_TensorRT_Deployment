@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
     std::vector<std::vector<float>> all_rows;
     std::string line;
     int row_count = 0;
-    while (std::getline(csv_file, line) && row_count < 5) {
+    while (std::getline(csv_file, line) && row_count < 100) {
         auto values = parseCSVLine(line);
         all_rows.push_back(values);
         row_count++;
