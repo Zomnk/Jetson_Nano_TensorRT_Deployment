@@ -11,11 +11,12 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
-#include <linux/joystick.h>
+#include <linux/input.h>
 #include <iomanip>
+#include <map>
 
 int main() {
-    const char* device = "/dev/input/js0";
+    const char* device = "/dev/input/event2";
     int fd = open(device, O_RDONLY | O_NONBLOCK);
 
     if (fd < 0) {
@@ -34,9 +35,9 @@ int main() {
     std::cout << "4. 肩键 - 按下LT/RT" << std::endl;
     std::cout << "\n按 Ctrl+C 退出\n" << std::endl;
 
-    struct js_event event;
-    int axis_values[8] = {0};
-    int button_values[16] = {0};
+    struct input_event event;
+    std::map<int, int> axis_values;
+    std::map<int, int> button_values;
 
     std::cout << std::string(80, '-') << std::endl;
     std::cout << "实时数据显示：" << std::endl;
@@ -48,24 +49,26 @@ int main() {
         ssize_t bytes = read(fd, &event, sizeof(event));
 
         if (bytes == sizeof(event)) {
-            // 处理轴事件
-            if (event.type == JS_EVENT_AXIS) {
-                axis_values[event.number] = event.value;
+            // 处理轴事件 (EV_ABS)
+            if (event.type == EV_ABS) {
+                axis_values[event.code] = event.value;
 
                 // 每50次循环打印一次
                 if (loop_count % 50 == 0) {
-                    std::cout << "\r[轴事件] 轴号: " << std::setw(2) << (int)event.number
+                    std::cout << "\r[轴事件] 轴码: " << std::setw(3) << event.code
+                              << " (0x" << std::hex << event.code << std::dec << ")"
                               << " | 值: " << std::setw(6) << event.value
                               << " | 归一化: " << std::fixed << std::setprecision(3)
                               << (event.value / 32768.0f) << "     ";
                     std::cout.flush();
                 }
             }
-            // 处理按钮事件
-            else if (event.type == JS_EVENT_BUTTON) {
-                button_values[event.number] = event.value;
+            // 处理按钮事件 (EV_KEY)
+            else if (event.type == EV_KEY) {
+                button_values[event.code] = event.value;
 
-                std::cout << "\r[按钮事件] 按钮号: " << std::setw(2) << (int)event.number
+                std::cout << "\r[按钮事件] 按钮码: " << std::setw(3) << event.code
+                          << " (0x" << std::hex << event.code << std::dec << ")"
                           << " | 状态: " << (event.value ? "按下" : "释放")
                           << "                    " << std::endl;
                 std::cout.flush();
@@ -75,11 +78,12 @@ int main() {
         // 定期打印当前轴值
         if (loop_count % 500 == 0 && loop_count > 0) {
             std::cout << "\n[当前轴值]" << std::endl;
-            for (int i = 0; i < 8; i++) {
-                if (axis_values[i] != 0) {
-                    std::cout << "  轴 " << i << ": " << std::setw(6) << axis_values[i]
+            for (auto& pair : axis_values) {
+                if (pair.second != 0) {
+                    std::cout << "  轴码 " << pair.first << " (0x" << std::hex << pair.first << std::dec << "): "
+                              << std::setw(6) << pair.second
                               << " (" << std::fixed << std::setprecision(3)
-                              << (axis_values[i] / 32768.0f) << ")" << std::endl;
+                              << (pair.second / 32768.0f) << ")" << std::endl;
                 }
             }
             std::cout << std::endl;
