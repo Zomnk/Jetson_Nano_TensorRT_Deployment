@@ -17,7 +17,7 @@
 
 int main() {
     const char* device = "/dev/input/event2";
-    int fd = open(device, O_RDONLY | O_NONBLOCK);
+    int fd = open(device, O_RDONLY);
 
     if (fd < 0) {
         std::cerr << "无法打开设备: " << device << std::endl;
@@ -28,6 +28,7 @@ int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "  手柄键码获取工具" << std::endl;
     std::cout << "========================================" << std::endl;
+    std::cout << "\n设备已打开: " << device << std::endl;
     std::cout << "\n请按照以下顺序操作手柄，记录对应的键码值：" << std::endl;
     std::cout << "1. 左摇杆 - 向左/右/上/下推动" << std::endl;
     std::cout << "2. 右摇杆 - 向左/右/上/下推动" << std::endl;
@@ -43,54 +44,47 @@ int main() {
     std::cout << "实时数据显示：" << std::endl;
     std::cout << std::string(80, '-') << std::endl;
 
-    int loop_count = 0;
+    int event_count = 0;
 
     while (true) {
         ssize_t bytes = read(fd, &event, sizeof(event));
 
         if (bytes == sizeof(event)) {
+            event_count++;
+
             // 处理轴事件 (EV_ABS)
             if (event.type == EV_ABS) {
                 axis_values[event.code] = event.value;
 
-                // 每50次循环打印一次
-                if (loop_count % 50 == 0) {
-                    std::cout << "\r[轴事件] 轴码: " << std::setw(3) << event.code
-                              << " (0x" << std::hex << event.code << std::dec << ")"
-                              << " | 值: " << std::setw(6) << event.value
-                              << " | 归一化: " << std::fixed << std::setprecision(3)
-                              << (event.value / 32768.0f) << "     ";
-                    std::cout.flush();
-                }
+                std::cout << "[轴事件 #" << event_count << "] 轴码: " << std::setw(3) << event.code
+                          << " (0x" << std::hex << std::setw(2) << std::setfill('0') << event.code << std::dec << std::setfill(' ') << ")"
+                          << " | 值: " << std::setw(6) << event.value
+                          << " | 归一化: " << std::fixed << std::setprecision(3)
+                          << (event.value / 32768.0f) << std::endl;
+                std::cout.flush();
             }
             // 处理按钮事件 (EV_KEY)
             else if (event.type == EV_KEY) {
                 button_values[event.code] = event.value;
 
-                std::cout << "\r[按钮事件] 按钮码: " << std::setw(3) << event.code
-                          << " (0x" << std::hex << event.code << std::dec << ")"
-                          << " | 状态: " << (event.value ? "按下" : "释放")
-                          << "                    " << std::endl;
+                std::cout << "[按钮事件 #" << event_count << "] 按钮码: " << std::setw(3) << event.code
+                          << " (0x" << std::hex << std::setw(2) << std::setfill('0') << event.code << std::dec << std::setfill(' ') << ")"
+                          << " | 状态: " << (event.value ? "按下" : "释放") << std::endl;
                 std::cout.flush();
             }
-        }
-
-        // 定期打印当前轴值
-        if (loop_count % 500 == 0 && loop_count > 0) {
-            std::cout << "\n[当前轴值]" << std::endl;
-            for (auto& pair : axis_values) {
-                if (pair.second != 0) {
-                    std::cout << "  轴码 " << pair.first << " (0x" << std::hex << pair.first << std::dec << "): "
-                              << std::setw(6) << pair.second
-                              << " (" << std::fixed << std::setprecision(3)
-                              << (pair.second / 32768.0f) << ")" << std::endl;
-                }
+            // 处理同步事件 (EV_SYN)
+            else if (event.type == EV_SYN) {
+                // 忽略同步事件
             }
-            std::cout << std::endl;
+            else {
+                std::cout << "[其他事件 #" << event_count << "] 类型: " << event.type
+                          << " | 码: " << event.code
+                          << " | 值: " << event.value << std::endl;
+            }
+        } else if (bytes < 0) {
+            std::cerr << "读取错误" << std::endl;
+            break;
         }
-
-        loop_count++;
-        usleep(10000);  // 10ms
     }
 
     close(fd);
