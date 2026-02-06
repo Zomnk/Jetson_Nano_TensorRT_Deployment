@@ -122,3 +122,8 @@ if(NVONNXPARSER_LIBRARY)
 else()
     message(WARNING "nvonnxparser not found, onnx_to_trt will not be built")
 endif()
+
+# ============================================================
+# 手柄键码获取工具
+# ============================================================
+add_executable(gamepad_calibration test/gamepad_calibration.cpp)
