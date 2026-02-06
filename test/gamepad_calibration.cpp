@@ -4,7 +4,8 @@
  * @details 用于获取当前手柄的轴值和按钮键码映射
  *
  * 编译: g++ -o gamepad_calibration gamepad_calibration.cpp
- * 运行: ./gamepad_calibration
+ * 运行: ./gamepad_calibration [device_path]
+ * 例如: ./gamepad_calibration /dev/input/event2
  */
 
 #include <iostream>
@@ -15,21 +16,37 @@
 #include <iomanip>
 #include <map>
 #include <errno.h>
+#include <sys/stat.h>
 
-int main() {
+int main(int argc, char* argv[]) {
     const char* device = "/dev/input/event2";
-    int fd = open(device, O_RDONLY);
 
-    if (fd < 0) {
-        std::cerr << "无法打开设备: " << device << std::endl;
-        std::cerr << "请确保手柄已连接，并且有读取权限" << std::endl;
-        return 1;
+    if (argc > 1) {
+        device = argv[1];
     }
 
     std::cout << "========================================" << std::endl;
     std::cout << "  手柄键码获取工具" << std::endl;
     std::cout << "========================================" << std::endl;
-    std::cout << "\n设备已打开: " << device << std::endl;
+    std::cout << "\n尝试打开设备: " << device << std::endl;
+
+    // 检查设备文件是否存在
+    struct stat st;
+    if (stat(device, &st) < 0) {
+        std::cerr << "设备文件不存在: " << device << std::endl;
+        std::cerr << "请检查设备路径或使用: ./gamepad_calibration /dev/input/eventX" << std::endl;
+        return 1;
+    }
+
+    int fd = open(device, O_RDONLY);
+    if (fd < 0) {
+        std::cerr << "无法打开设备: " << device << std::endl;
+        std::cerr << "错误: " << strerror(errno) << std::endl;
+        std::cerr << "请确保有读取权限，可能需要: sudo chmod 666 " << device << std::endl;
+        return 1;
+    }
+
+    std::cout << "设备已打开成功！" << std::endl;
     std::cout << "\n请按照以下顺序操作手柄，记录对应的键码值：" << std::endl;
     std::cout << "1. 左摇杆 - 向左/右/上/下推动" << std::endl;
     std::cout << "2. 右摇杆 - 向左/右/上/下推动" << std::endl;
@@ -46,12 +63,14 @@ int main() {
     std::cout << std::string(80, '-') << std::endl;
 
     int event_count = 0;
+    int read_errors = 0;
 
     while (true) {
         ssize_t bytes = read(fd, &event, sizeof(event));
 
         if (bytes == sizeof(event)) {
             event_count++;
+            read_errors = 0;
 
             // 处理轴事件 (EV_ABS)
             if (event.type == EV_ABS) {
@@ -84,11 +103,13 @@ int main() {
             }
         } else if (bytes < 0) {
             if (errno == EINTR) {
-                // 被信号中断，继续读取
                 continue;
             }
-            std::cerr << "读取错误: " << strerror(errno) << std::endl;
-            break;
+            read_errors++;
+            if (read_errors > 10) {
+                std::cerr << "读取错误: " << strerror(errno) << std::endl;
+                break;
+            }
         } else if (bytes == 0) {
             std::cerr << "设备已关闭" << std::endl;
             break;
