@@ -14,6 +14,7 @@
 #include <linux/input.h>
 #include <iomanip>
 #include <map>
+#include <errno.h>
 
 int main() {
     const char* device = "/dev/input/event2";
@@ -82,7 +83,14 @@ int main() {
                           << " | 值: " << event.value << std::endl;
             }
         } else if (bytes < 0) {
-            std::cerr << "读取错误" << std::endl;
+            if (errno == EINTR) {
+                // 被信号中断，继续读取
+                continue;
+            }
+            std::cerr << "读取错误: " << strerror(errno) << std::endl;
+            break;
+        } else if (bytes == 0) {
+            std::cerr << "设备已关闭" << std::endl;
             break;
         }
     }
