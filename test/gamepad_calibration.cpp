@@ -17,6 +17,7 @@
 #include <map>
 #include <errno.h>
 #include <sys/stat.h>
+#include <dirent.h>
 
 int main(int argc, char* argv[]) {
     const char* device = "/dev/input/event2";
@@ -34,15 +35,24 @@ int main(int argc, char* argv[]) {
     struct stat st;
     if (stat(device, &st) < 0) {
         std::cerr << "设备文件不存在: " << device << std::endl;
-        std::cerr << "请检查设备路径或使用: ./gamepad_calibration /dev/input/eventX" << std::endl;
+        std::cerr << "\n可用的输入设备:" << std::endl;
+        DIR* dir = opendir("/dev/input");
+        if (dir) {
+            struct dirent* entry;
+            while ((entry = readdir(dir)) != nullptr) {
+                if (strncmp(entry->d_name, "event", 5) == 0) {
+                    std::cerr << "  /dev/input/" << entry->d_name << std::endl;
+                }
+            }
+            closedir(dir);
+        }
         return 1;
     }
 
-    int fd = open(device, O_RDONLY);
+    int fd = open(device, O_RDONLY | O_NONBLOCK);
     if (fd < 0) {
         std::cerr << "无法打开设备: " << device << std::endl;
         std::cerr << "错误: " << strerror(errno) << std::endl;
-        std::cerr << "请确保有读取权限，可能需要: sudo chmod 666 " << device << std::endl;
         return 1;
     }
 
@@ -63,14 +73,14 @@ int main(int argc, char* argv[]) {
     std::cout << std::string(80, '-') << std::endl;
 
     int event_count = 0;
-    int read_errors = 0;
+    int empty_reads = 0;
 
     while (true) {
         ssize_t bytes = read(fd, &event, sizeof(event));
 
         if (bytes == sizeof(event)) {
             event_count++;
-            read_errors = 0;
+            empty_reads = 0;
 
             // 处理轴事件 (EV_ABS)
             if (event.type == EV_ABS) {
@@ -102,11 +112,19 @@ int main(int argc, char* argv[]) {
                           << " | 值: " << event.value << std::endl;
             }
         } else if (bytes < 0) {
-            if (errno == EINTR) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                empty_reads++;
+                if (empty_reads == 1) {
+                    std::cerr << "警告: 设备没有发送事件，请检查手柄是否连接或是否为正确的设备" << std::endl;
+                }
+                if (empty_reads > 100) {
+                    std::cerr << "设备无响应，退出" << std::endl;
+                    break;
+                }
+                usleep(100000);  // 100ms
+            } else if (errno == EINTR) {
                 continue;
-            }
-            read_errors++;
-            if (read_errors > 10) {
+            } else {
                 std::cerr << "读取错误: " << strerror(errno) << std::endl;
                 break;
             }
