@@ -110,7 +110,7 @@ bool load_init_pose(const string& filename, float init_pos[10]) {
 }
 
 int main(int argc, char** argv) {
-    string target_ip = "192.168.5.159";
+    string target_ip = "192.168.137.4";
     int port = 10000;
     string config_file = "../robot.yaml";
     int steps = 500;  // 线性插值步数

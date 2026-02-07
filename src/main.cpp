@@ -204,7 +204,7 @@ int main(int argc, char** argv) {
 
     // ========== 解析命令行参数 ==========
     std::string engine_path = argv[1];              // TensorRT引擎路径
-    std::string target_ip = "192.168.5.159";        // ODroid IP地址
+    std::string target_ip = "192.168.137.4";        // ODroid IP地址
     int port = 10000;                               // UDP端口
     std::string config_file = "../robot.yaml";      // 标定文件路径
 

@@ -9,7 +9,7 @@
  *
  * @note 使用方法:
  *       ./test_udp [IP] [端口]
- *       ./test_udp 192.168.5.159 10000
+ *       ./test_udp 192.168.137.4 10000
  */
 
 #include <iostream>
@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
     signal(SIGTERM, signal_handler);
 
     // 解析命令行参数
-    string ip = (argc >= 2) ? argv[1] : "192.168.5.159";
+    string ip = (argc >= 2) ? argv[1] : "192.168.137.4";
     int port = (argc >= 3) ? atoi(argv[2]) : 10000;
 
     // 打印测试信息

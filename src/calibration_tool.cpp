@@ -284,7 +284,7 @@ int main(int argc, char** argv) {
     cout << "========================================" << endl;
 
     // 解析命令行参数
-    string ip = "192.168.5.159";
+    string ip = "192.168.137.4";
     int port = 10000;
     string output = "../robot.yaml";
     int target_joint = -1;
