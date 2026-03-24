@@ -291,6 +291,25 @@ cmake .. -DTENSORRT_ROOT=/usr/local/tensorrt
 - 确保包含 10 个标定值 (左腿 5 个 + 右腿 5 个)
 - 使用 `calibration_tool` 重新生成标定文件
 
+## Selection Examples（可选示例集）
+
+本项目提供了一组可按需选择使用的示例工具，覆盖从模型转换到机器人预检的完整部署链路：
+
+| 示例 | 可执行文件 | 功能说明 |
+|------|-----------|---------|
+| `test/test_trt_engine.cpp` | `test_trt_engine` | TensorRT 引擎加载与推理性能测试 |
+| `test/test_trt_engine_csv.cpp` | `test_trt_engine_csv` | 与仿真黄金数据逐步对比，精度回归测试 |
+| `test/test_udp.cpp` | `test_udp` | Jetson ↔ ODroid UDP 通信链路验证 |
+| `test/test_motors.cpp` | `test_motors` | 正弦波电机控制测试，验证关节响应 |
+| `test/test_init_pose.cpp` | `test_init_pose` | 线性插值平滑归零到初始姿态 |
+| `test/gamepad_calibration.cpp` | `gamepad_calibration` | 手柄轴值与按钮键码实时获取 |
+| `tools/onnx_to_trt.cpp` | `onnx_to_trt` | ONNX → TensorRT 引擎转换（C++ 版） |
+| `scripts/convert_to_trt.py` | — | PyTorch → ONNX → TRT 完整转换脚本 |
+| `scripts/convert_to_onnx.py` | — | PyTorch → ONNX 导出与数值验证脚本 |
+
+详细说明（用途、场景、运行命令、输入输出格式）请参见：
+👉 **[docs/selection_examples.md](docs/selection_examples.md)**
+
 ## 开发指南
 
 详见 [CLAUDE.md](CLAUDE.md) 了解项目架构、常用命令和开发建议。
