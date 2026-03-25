@@ -19,10 +19,9 @@
 #ifndef HARDWARE_ABSTRACTION_H
 #define HARDWARE_ABSTRACTION_H
 
+#include "types.h"
 #include <array>
 #include <string>
-
-constexpr int DOF_NUM = 10;
 
 /**
  * @brief 硬件配置结构体
