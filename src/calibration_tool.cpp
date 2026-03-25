@@ -27,32 +27,9 @@
 #include <ctime>
 #include <string>
 #include <sstream>
+#include "types.h"
 
 using namespace std;
-
-/*
- * ============================================================
- * 消息结构体定义
- * ============================================================
- */
-
-struct MsgRequest {
-    float trigger;
-    float command[4];
-    float eu_ang[3];
-    float omega[3];
-    float acc[3];
-    float q[10];
-    float dq[10];
-    float tau[10];
-    float init_pos[10];
-};
-
-struct MsgResponse {
-    float q_exp[10];
-    float dq_exp[10];
-    float tau_exp[10];
-};
 
 /*
  * ============================================================

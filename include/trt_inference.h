@@ -68,6 +68,15 @@ public:
                           const int* sign_array);
 
     /**
+     * @brief 设置初始站立姿态（已废弃，保留用于向后兼容）
+     * @param init_pos 10个关节的初始位置数组
+     *
+     * @details 此方法已被 setHardwareConfig() 替代。
+     *          为保持向后兼容，此方法将 init_pos 设置为 offset。
+     */
+    void setInitPose(const float* init_pos);
+
+    /**
      * @brief 重置推理状态
      *
      * @details 清零上次动作缓存和控制指令滤波器，

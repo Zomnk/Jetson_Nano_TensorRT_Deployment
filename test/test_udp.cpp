@@ -20,34 +20,9 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <csignal>
+#include "types.h"
 
 using namespace std;
-
-/*
- * ============================================================
- * 消息结构体定义（与ODroid保持一致）
- * ============================================================
- */
-
-/// ODroid发送的请求消息
-struct MsgRequest {
-    float trigger;          ///< 触发标志
-    float command[4];       ///< 控制指令
-    float eu_ang[3];        ///< 欧拉角
-    float omega[3];         ///< 角速度
-    float acc[3];           ///< 加速度
-    float q[10];            ///< 关节位置
-    float dq[10];           ///< 关节速度
-    float tau[10];          ///< 关节力矩
-    float init_pos[10];     ///< 初始位置
-};
-
-/// Jetson发送的响应消息
-struct MsgResponse {
-    float q_exp[10];        ///< 期望关节位置
-    float dq_exp[10];       ///< 期望关节速度
-    float tau_exp[10];      ///< 期望关节力矩
-};
 
 /// 运行标志
 volatile bool g_running = true;
