@@ -1,43 +1,38 @@
 /**
  * @file calibration_tool.cpp
- * @brief 双足机器人初始姿态标定工具
- * @author Zomnk
- * @date 2026-02-04
+ * @brief 双足机器人 Sim-to-Real 标定工具（重构版）
+ * @author Claude Code
+ * @date 2026-03-25
  *
  * @note 功能说明：
- *       1. 交互式标定10个关节的初始站立位置
- *       2. 实时显示当前关节角度
- *       3. 保存标定结果到robot.yaml文件
- *       4. 支持单独标定某个关节或全部标定
+ *       1. 输入算法层基准姿态（default_angles）
+ *       2. 手动摆放机器人到期望站立姿态
+ *       3. 读取编码器值作为硬件零点偏置（offset）
+ *       4. 配置关节方向映射（sign_array）
+ *       5. 保存完整的 robot.yaml 配置文件
  *
  * @note 使用方法：
- *       ./calibration_tool              # 标定所有关节
- *       ./calibration_tool --joint 0    # 只标定指定关节
+ *       ./calibration_tool [--ip IP] [--port PORT]
  */
 
-#define _USE_MATH_DEFINES
-#include <cmath>
 #include <iostream>
 #include <iomanip>
 #include <fstream>
 #include <cstring>
 #include <sys/socket.h>
-#include <sys/select.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <csignal>
-#include <cstdlib>
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
+#include <ctime>
+#include <string>
+#include <sstream>
 
 using namespace std;
 
 /*
  * ============================================================
- * 消息结构体定义（与ODroid保持一致）
+ * 消息结构体定义
  * ============================================================
  */
 
@@ -65,16 +60,21 @@ struct MsgResponse {
  * ============================================================
  */
 const char* JOINT_NAMES[10] = {
-    "左腿Yaw (L_YAW)",
-    "左腿Roll (L_ROLL)",
-    "左腿Pitch (L_PITCH)",
-    "左腿Knee (L_KNEE)",
-    "左腿Ankle (L_ANKLE)",
-    "右腿Yaw (R_YAW)",
-    "右腿Roll (R_ROLL)",
-    "右腿Pitch (R_PITCH)",
-    "右腿Knee (R_KNEE)",
-    "右腿Ankle (R_ANKLE)"
+    "左腿Yaw",
+    "左腿Roll",
+    "左腿Pitch",
+    "左腿Knee",
+    "左腿Ankle",
+    "右腿Yaw",
+    "右腿Roll",
+    "右腿Pitch",
+    "右腿Knee",
+    "右腿Ankle"
+};
+
+const char* YAML_KEYS[10] = {
+    "yaw", "roll", "pitch", "knee", "ankle",
+    "yaw", "roll", "pitch", "knee", "ankle"
 };
 
 /*
@@ -83,381 +83,379 @@ const char* JOINT_NAMES[10] = {
  * ============================================================
  */
 volatile bool g_running = true;
-bool terminal_modified = false;
 
-/**
- * @brief 信号处理函数
- */
 void signal_handler(int sig) {
-    cout << "\n\n收到信号 " << sig << ", 退出标定..." << endl;
+    cout << "\n收到信号 " << sig << ", 退出标定..." << endl;
     g_running = false;
-
-    // 恢复终端设置
-    if (terminal_modified) {
-        system("stty icanon echo");
-        terminal_modified = false;
-    }
 }
 
 /**
- * @brief 启用终端原始模式（非阻塞输入）
+ * @brief 保存完整的 robot.yaml 配置文件
  */
-void enable_raw_mode() {
-    system("stty -icanon -echo");
-    terminal_modified = true;
-}
-
-/**
- * @brief 恢复终端设置
- */
-void disable_raw_mode() {
-    if (terminal_modified) {
-        system("stty icanon echo");
-        terminal_modified = false;
-    }
-}
-
-/**
- * @brief 保存标定结果到YAML文件
- * @param init_pos 10个关节的初始位置
- * @param filename YAML文件路径
- */
-bool save_yaml(const float init_pos[10], const string& filename) {
+bool save_yaml(const float default_angles[10],
+               const float offset[10],
+               const int sign_array[10],
+               const string& filename) {
     ofstream f(filename);
-    if (!f.is_open()) return false;
+    if (!f.is_open()) {
+        cerr << "无法创建文件: " << filename << endl;
+        return false;
+    }
 
-    f << "# 双足机器人初始姿态标定数据" << endl;
-    f << "# 生成时间: " << __DATE__ << " " << __TIME__ << endl;
-    f << "# 单位: 弧度 (rad)" << endl;
+    // 获取当前时间
+    time_t now = time(nullptr);
+    char time_str[100];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
+
+    f << "# 双足机器人 Sim-to-Real 配置文件" << endl;
+    f << "# 生成时间: " << time_str << endl;
+    f << "# 单位: 弧度 (rad) 和方向系数" << endl;
     f << endl;
     f << "robot_config:" << endl;
-    f << "  init_pose:" << endl;
 
-    // 左腿
+    // ========== default_angles ==========
+    f << "  # ========================================" << endl;
+    f << "  # 算法层基准姿态 (default_angles)" << endl;
+    f << "  # ========================================" << endl;
+    f << "  # 说明：这是训练环境中使用的基准姿态，通常来自训练时的 default_joint_angles" << endl;
+    f << "  # 注意：这个值应该与训练环境保持一致，不是实机标定时读到的编码器值" << endl;
+    f << "  default_angles:" << endl;
     f << "    left_leg:" << endl;
-    f << "      yaw:   " << fixed << setprecision(6) << init_pos[0] << "  # rad" << endl;
-    f << "      roll:  " << init_pos[1] << "  # rad" << endl;
-    f << "      pitch: " << init_pos[2] << "  # rad" << endl;
-    f << "      knee:  " << init_pos[3] << "  # rad" << endl;
-    f << "      ankle: " << init_pos[4] << "  # rad" << endl;
-
-    // 右腿
+    for (int i = 0; i < 5; i++) {
+        f << "      " << left << setw(6) << YAML_KEYS[i] << ": "
+          << fixed << setprecision(6) << setw(10) << default_angles[i] << "  # rad" << endl;
+    }
     f << "    right_leg:" << endl;
-    f << "      yaw:   " << init_pos[5] << "  # rad" << endl;
-    f << "      roll:  " << init_pos[6] << "  # rad" << endl;
-    f << "      pitch: " << init_pos[7] << "  # rad" << endl;
-    f << "      knee:  " << init_pos[8] << "  # rad" << endl;
-    f << "      ankle: " << init_pos[9] << "  # rad" << endl;
-
-    // 备注说明
+    for (int i = 5; i < 10; i++) {
+        f << "      " << left << setw(6) << YAML_KEYS[i] << ": "
+          << fixed << setprecision(6) << setw(10) << default_angles[i] << "  # rad" << endl;
+    }
     f << endl;
-    f << "  # 说明:" << endl;
-    f << "  # - 此文件由 calibration_tool 工具生成" << endl;
-    f << "  # - 请勿手动修改，除非了解参数含义" << endl;
-    f << "  # - 重新标定会覆盖此文件" << endl;
+
+    // ========== offset ==========
+    f << "  # ========================================" << endl;
+    f << "  # 硬件零点偏置 (offset)" << endl;
+    f << "  # ========================================" << endl;
+    f << "  # 说明：每台机器独立标定的编码器零点偏置" << endl;
+    f << "  # 这是让机器人站到期望姿态时，实际读取到的编码器值" << endl;
+    f << "  offset:" << endl;
+    f << "    left_leg:" << endl;
+    for (int i = 0; i < 5; i++) {
+        f << "      " << left << setw(6) << YAML_KEYS[i] << ": "
+          << fixed << setprecision(6) << setw(10) << offset[i] << "  # rad" << endl;
+    }
+    f << "    right_leg:" << endl;
+    for (int i = 5; i < 10; i++) {
+        f << "      " << left << setw(6) << YAML_KEYS[i] << ": "
+          << fixed << setprecision(6) << setw(10) << offset[i] << "  # rad" << endl;
+    }
+    f << endl;
+
+    // ========== sign_array ==========
+    f << "  # ========================================" << endl;
+    f << "  # 关节方向映射 (sign_array)" << endl;
+    f << "  # ========================================" << endl;
+    f << "  # 说明：定义每个关节的旋转方向" << endl;
+    f << "  # 1 = 与训练环境方向一致" << endl;
+    f << "  # -1 = 与训练环境方向相反" << endl;
+    f << "  sign_array:" << endl;
+    f << "    left_leg:" << endl;
+    for (int i = 0; i < 5; i++) {
+        f << "      " << left << setw(6) << YAML_KEYS[i] << ": "
+          << setw(2) << sign_array[i] << "  # 1 or -1" << endl;
+    }
+    f << "    right_leg:" << endl;
+    for (int i = 5; i < 10; i++) {
+        f << "      " << left << setw(6) << YAML_KEYS[i] << ": "
+          << setw(2) << sign_array[i] << "  # 1 or -1" << endl;
+    }
+    f << endl;
+
+    // ========== 使用说明 ==========
+    f << "# ========================================" << endl;
+    f << "# 使用说明" << endl;
+    f << "# ========================================" << endl;
+    f << "# 1. default_angles: 从训练环境获取，保持与训练时一致" << endl;
+    f << "# 2. offset: 通过 calibration_tool 标定获得" << endl;
+    f << "# 3. sign_array: 根据实际硬件装配确定，需要逐关节测试验证" << endl;
+    f << "#" << endl;
+    f << "# 坐标变换关系：" << endl;
+    f << "# - 观测链路 (Real → Sim):" << endl;
+    f << "#   q_sim = (q_real - offset) * sign_array" << endl;
+    f << "#   dq_sim = dq_real * sign_array" << endl;
+    f << "#" << endl;
+    f << "# - 控制链路 (Sim → Real):" << endl;
+    f << "#   q_real = q_sim * sign_array + offset" << endl;
 
     f.close();
     return true;
 }
 
 /**
- * @brief 标定单个关节
- * @param joint_id 关节ID (0-9)
- * @param sock_fd UDP socket
- * @param addr ODroid地址
- * @param addr_len 地址长度
- * @param calibrated_positions 已标定的关节位置数组（用于保持其他关节位置）
- * @return 标定的关节位置
+ * @brief 从用户输入读取浮点数数组
  */
-float calibrate_joint(int joint_id, int sock_fd, struct sockaddr_in& addr, socklen_t addr_len,
-                     float calibrated_positions[10]) {
-    cout << "\n========================================" << endl;
-    cout << "正在标定: " << JOINT_NAMES[joint_id] << " [ID=" << joint_id << "]" << endl;
-    cout << "========================================" << endl;
-    cout << "操作说明:" << endl;
-    cout << "  1. 手动调整机器人到期望的初始站立姿态" << endl;
-    cout << "  2. 观察下方显示的当前关节角度" << endl;
-    cout << "  3. 确认姿态合适后，按 Enter 键保存" << endl;
-    cout << "  4. 按 's' 跳过此关节（使用默认值0.0）" << endl;
-    cout << "========================================" << endl;
-    cout << "提示: 标定期间该关节扭矩已卸载，可手动调整" << endl;
+bool read_float_array(const string& prompt, float arr[10], float default_val = 0.0f) {
+    cout << prompt << endl;
+    cout << "输入格式: 10个浮点数，用空格分隔" << endl;
+    cout << "或直接按 Enter 使用默认值 [" << default_val << " × 10]: ";
 
-    MsgRequest request;
-    MsgResponse response;
-    memset(&response, 0, sizeof(response));
+    string line;
+    getline(cin, line);
 
-    float current_angle = 0.0f;
-    int update_count = 0;
-
-    cout << "\n实时角度监测中... (按Enter确认, 按's'跳过)" << endl;
-    cout << "-------------------------------------------" << endl;
-
-    enable_raw_mode();
-
-    while (g_running) {
-        char buf[512];
-        int n = recvfrom(sock_fd, buf, sizeof(buf), 0, (struct sockaddr*)&addr, &addr_len);
-
-        if (n > 0) {
-            memcpy(&request, buf, sizeof(request));
-            current_angle = request.q[joint_id];
-
-            // 标定协议：
-            // - dq_exp[0] = -999.0 表示标定模式
-            // - tau_exp[0] = joint_id 表示当前标定的关节ID
-            // - 当前标定关节：q_exp = 当前实际位置（卸载扭矩）
-            // - 已标定关节：q_exp = 标定位置（保持位置）
-            // - 未标定关节：q_exp = 当前实际位置（跟随）
-            for (int i = 0; i < 10; i++) {
-                if (i == joint_id) {
-                    // 当前标定关节：跟随实际位置（卸载扭矩）
-                    response.q_exp[i] = request.q[i];
-                } else if (calibrated_positions[i] != -9999.0f) {
-                    // 已标定关节：保持标定位置
-                    response.q_exp[i] = calibrated_positions[i];
-                } else {
-                    // 未标定关节：跟随实际位置
-                    response.q_exp[i] = request.q[i];
-                }
-                response.dq_exp[i] = 0.0f;
-                response.tau_exp[i] = 0.0f;
-            }
-            response.dq_exp[0] = -999.0f;  // 标定模式标志
-            response.tau_exp[0] = static_cast<float>(joint_id);  // 当前标定的关节ID
-
-            memcpy(buf, &response, sizeof(response));
-            sendto(sock_fd, buf, sizeof(response), 0, (struct sockaddr*)&addr, addr_len);
-
-            // 更新显示
-            if (update_count % 10 == 0) {
-                cout << "\r当前角度: " << fixed << setprecision(4) << setw(8)
-                     << current_angle << " rad (" << setw(7) << setprecision(2)
-                     << (current_angle * 180.0 / M_PI) << " deg)   " << flush;
-            }
-            update_count++;
+    if (line.empty()) {
+        for (int i = 0; i < 10; i++) {
+            arr[i] = default_val;
         }
-
-        // 检查键盘输入（使用select实现非阻塞）
-        fd_set readfds;
-        struct timeval tv;
-        FD_ZERO(&readfds);
-        FD_SET(STDIN_FILENO, &readfds);
-        tv.tv_sec = 0;
-        tv.tv_usec = 1000;  // 1ms超时
-
-        if (select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv) > 0) {
-            char ch = getchar();
-            if (ch == '\n') {
-                // Enter键 - 确认标定
-                break;
-            } else if (ch == 's' || ch == 'S') {
-                // 跳过此关节
-                cout << "\n跳过标定，使用默认值 0.0 rad" << endl;
-                current_angle = 0.0f;
-                break;
-            }
-        }
-
-        usleep(2000);
+        return true;
     }
 
-    disable_raw_mode();
-
-    if (!g_running) {
-        cout << "\n标定被中断" << endl;
-        return current_angle;
+    istringstream iss(line);
+    for (int i = 0; i < 10; i++) {
+        if (!(iss >> arr[i])) {
+            cerr << "输入格式错误，需要10个数值" << endl;
+            return false;
+        }
     }
 
-    cout << "\n✓ 标定完成: " << current_angle << " rad" << endl;
-    return current_angle;
+    return true;
+}
+
+/**
+ * @brief 从用户输入读取整数数组
+ */
+bool read_int_array(const string& prompt, int arr[10], int default_val = 1) {
+    cout << prompt << endl;
+    cout << "输入格式: 10个整数（1 或 -1），用空格分隔" << endl;
+    cout << "或直接按 Enter 使用默认值 [" << default_val << " × 10]: ";
+
+    string line;
+    getline(cin, line);
+
+    if (line.empty()) {
+        for (int i = 0; i < 10; i++) {
+            arr[i] = default_val;
+        }
+        return true;
+    }
+
+    istringstream iss(line);
+    for (int i = 0; i < 10; i++) {
+        if (!(iss >> arr[i])) {
+            cerr << "输入格式错误，需要10个数值" << endl;
+            return false;
+        }
+        if (arr[i] != 1 && arr[i] != -1) {
+            cerr << "sign_array 的值必须是 1 或 -1" << endl;
+            return false;
+        }
+    }
+
+    return true;
 }
 
 /**
  * @brief 主函数
  */
 int main(int argc, char** argv) {
+    // 解析命令行参数
+    string target_ip = "192.168.5.159";
+    int port = 10000;
+
+    for (int i = 1; i < argc; i++) {
+        string arg = argv[i];
+        if (arg == "--ip" && i + 1 < argc) {
+            target_ip = argv[++i];
+        } else if (arg == "--port" && i + 1 < argc) {
+            port = atoi(argv[++i]);
+        }
+    }
+
+    // 注册信号处理
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
     cout << "========================================" << endl;
-    cout << "   双足机器人初始姿态标定工具" << endl;
+    cout << "  双足机器人 Sim-to-Real 标定工具" << endl;
+    cout << "  目标: " << target_ip << ":" << port << endl;
     cout << "========================================" << endl;
+    cout << endl;
 
-    // 解析命令行参数
-    string ip = "192.168.5.159";
-    int port = 10000;
-    string output = "../robot.yaml";
-    int target_joint = -1;
+    // ========== 步骤1: 输入 default_angles ==========
+    cout << "【步骤 1/3】输入算法层基准姿态 (default_angles)" << endl;
+    cout << "说明：这是训练环境中使用的基准姿态，通常来自训练配置文件" << endl;
+    cout << "      如果训练使用对称站立姿态，通常全部为 0" << endl;
+    cout << endl;
 
-    for (int i = 1; i < argc; i++) {
-        string arg = argv[i];
-        if (arg == "--joint" && i + 1 < argc) {
-            target_joint = atoi(argv[++i]);
-            if (target_joint < 0 || target_joint > 9) {
-                cerr << "错误: 关节ID必须在0-9之间" << endl;
-                return 1;
-            }
-        }
-        else if (arg == "--output" && i + 1 < argc) output = argv[++i];
-        else if (arg == "--ip" && i + 1 < argc) ip = argv[++i];
-        else if (arg == "--help" || arg == "-h") {
-            cout << "使用方法:" << endl;
-            cout << "  " << argv[0] << " [选项]" << endl;
-            cout << "\n选项:" << endl;
-            cout << "  --joint <ID>      只标定指定关节 (0-9)" << endl;
-            cout << "  --output <FILE>   指定输出文件 (默认: ../robot.yaml)" << endl;
-            cout << "  --ip <IP>         ODroid IP地址" << endl;
-            cout << "  --help, -h        显示此帮助信息" << endl;
-            cout << "\n关节ID映射:" << endl;
-            for (int j = 0; j < 10; j++) {
-                cout << "  " << j << " - " << JOINT_NAMES[j] << endl;
-            }
-            return 0;
-        }
+    float default_angles[10];
+    if (!read_float_array("请输入 default_angles:", default_angles, 0.0f)) {
+        return 1;
     }
 
-    cout << "通信配置: " << ip << ":" << port << endl;
-    cout << "输出文件: " << output << endl;
-
-    if (target_joint >= 0) {
-        cout << "标定模式: 单关节 [" << JOINT_NAMES[target_joint] << "]" << endl;
-    } else {
-        cout << "标定模式: 全部关节 (10个)" << endl;
+    cout << "\n已设置 default_angles:" << endl;
+    cout << "  左腿: [";
+    for (int i = 0; i < 5; i++) {
+        cout << fixed << setprecision(3) << default_angles[i];
+        if (i < 4) cout << ", ";
     }
-    cout << "========================================" << endl;
+    cout << "]" << endl;
+    cout << "  右腿: [";
+    for (int i = 5; i < 10; i++) {
+        cout << fixed << setprecision(3) << default_angles[i];
+        if (i < 9) cout << ", ";
+    }
+    cout << "]" << endl;
+    cout << endl;
+
+    // ========== 步骤2: 读取 offset ==========
+    cout << "【步骤 2/3】标定硬件零点偏置 (offset)" << endl;
+    cout << "说明：请手动调整机器人到期望的站立姿态" << endl;
+    cout << "      然后按 Enter 读取当前编码器值作为 offset" << endl;
+    cout << endl;
+    cout << "按 Enter 继续...";
+    cin.get();
 
     // 创建UDP socket
-    int sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock_fd < 0) {
-        cerr << "创建socket失败!" << endl;
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        cerr << "无法创建socket" << endl;
         return 1;
     }
 
     // 设置接收超时
     struct timeval tv;
     tv.tv_sec = 0;
-    tv.tv_usec = 100000;
-    setsockopt(sock_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    tv.tv_usec = 100000;  // 100ms
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     // 绑定本地端口
-    struct sockaddr_in local_addr, remote_addr;
+    struct sockaddr_in local_addr;
     memset(&local_addr, 0, sizeof(local_addr));
     local_addr.sin_family = AF_INET;
-    local_addr.sin_addr.s_addr = INADDR_ANY;
+    local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     local_addr.sin_port = htons(port);
 
-    if (bind(sock_fd, (struct sockaddr*)&local_addr, sizeof(local_addr)) < 0) {
-        cerr << "Bind端口失败! 请检查端口" << port << "是否被占用" << endl;
-        close(sock_fd);
+    if (bind(sock, (struct sockaddr*)&local_addr, sizeof(local_addr)) < 0) {
+        cerr << "绑定端口失败" << endl;
+        close(sock);
         return 1;
     }
 
     // 配置远程地址
+    struct sockaddr_in remote_addr;
     memset(&remote_addr, 0, sizeof(remote_addr));
     remote_addr.sin_family = AF_INET;
-    remote_addr.sin_addr.s_addr = inet_addr(ip.c_str());
+    remote_addr.sin_addr.s_addr = inet_addr(target_ip.c_str());
     remote_addr.sin_port = htons(port);
 
-    cout << "\n等待与ODroid建立连接..." << endl;
+    cout << "正在连接 ODroid..." << endl;
 
-    // 等待首次反馈
-    socklen_t addr_len = sizeof(remote_addr);
-    bool connected = false;
-    while (!connected && g_running) {
-        MsgResponse dummy;
-        memset(&dummy, 0, sizeof(dummy));
-        sendto(sock_fd, &dummy, sizeof(dummy), 0, (struct sockaddr*)&remote_addr, addr_len);
+    MsgRequest request;
+    MsgResponse response;
+    memset(&response, 0, sizeof(response));
 
-        char buf[512];
-        if (recvfrom(sock_fd, buf, sizeof(buf), 0, (struct sockaddr*)&remote_addr, &addr_len) > 0) {
-            connected = true;
-            cout << "✓ 已连接到ODroid，开始标定..." << endl;
+    float offset[10] = {0};
+    bool got_feedback = false;
+
+    // 尝试获取反馈
+    for (int i = 0; i < 50 && !got_feedback; i++) {
+        sendto(sock, (char*)&response, sizeof(response), 0,
+               (struct sockaddr*)&remote_addr, sizeof(remote_addr));
+
+        socklen_t addr_len = sizeof(remote_addr);
+        if (recvfrom(sock, (char*)&request, sizeof(request), 0,
+                     (struct sockaddr*)&remote_addr, &addr_len) > 0) {
+            for (int j = 0; j < 10; j++) {
+                offset[j] = request.q[j];
+            }
+            got_feedback = true;
+            cout << "已连接 ODroid" << endl;
         }
-        usleep(100000);
+        usleep(10000);
     }
 
-    if (!g_running) {
-        close(sock_fd);
-        return 0;
+    close(sock);
+
+    if (!got_feedback) {
+        cerr << "错误: 无法连接到 ODroid，请检查网络连接" << endl;
+        return 1;
     }
 
-    // 标定数组
-    float init_pos[10] = {0};
+    cout << "\n已读取编码器值 (q_encoder_stand):" << endl;
+    cout << "  左腿: [";
+    for (int i = 0; i < 5; i++) {
+        cout << fixed << setprecision(3) << offset[i];
+        if (i < 4) cout << ", ";
+    }
+    cout << "]" << endl;
+    cout << "  右腿: [";
+    for (int i = 5; i < 10; i++) {
+        cout << fixed << setprecision(3) << offset[i];
+        if (i < 9) cout << ", ";
+    }
+    cout << "]" << endl;
 
-    // 已标定位置数组（-9999.0表示未标定）
-    float calibrated_positions[10];
+    // ========== 计算 offset = q_encoder_stand - default_angles ==========
+    cout << "\n计算 offset = q_encoder_stand - default_angles:" << endl;
     for (int i = 0; i < 10; i++) {
-        calibrated_positions[i] = -9999.0f;  // 未标定标志
+        offset[i] = offset[i] - default_angles[i];
+    }
+    cout << "  左腿: [";
+    for (int i = 0; i < 5; i++) {
+        cout << fixed << setprecision(3) << offset[i];
+        if (i < 4) cout << ", ";
+    }
+    cout << "]" << endl;
+    cout << "  右腿: [";
+    for (int i = 5; i < 10; i++) {
+        cout << fixed << setprecision(3) << offset[i];
+        if (i < 9) cout << ", ";
+    }
+    cout << "]" << endl;
+    cout << endl;
+
+    // ========== 步骤3: 输入 sign_array ==========
+    cout << "【步骤 3/3】配置关节方向映射 (sign_array)" << endl;
+    cout << "说明：定义每个关节的旋转方向" << endl;
+    cout << "      1 = 与训练环境方向一致" << endl;
+    cout << "      -1 = 与训练环境方向相反" << endl;
+    cout << "      建议：先使用默认值 [1 × 10]，然后通过测试工具逐关节验证" << endl;
+    cout << endl;
+
+    int sign_array[10];
+    if (!read_int_array("请输入 sign_array:", sign_array, 1)) {
+        return 1;
     }
 
-    // 读取现有配置（如果存在）
-    ifstream existing_yaml(output);
-    if (existing_yaml.is_open()) {
-        cout << "\n检测到现有配置文件，将作为默认值..." << endl;
-        string line;
-        int idx = 0;
-        while (getline(existing_yaml, line) && idx < 10) {
-            size_t pos = line.find(':');
-            if (pos != string::npos) {
-                string value_str = line.substr(pos + 1);
-                size_t comment_pos = value_str.find('#');
-                if (comment_pos != string::npos) {
-                    value_str = value_str.substr(0, comment_pos);
-                }
-                try {
-                    float value = stof(value_str);
-                    init_pos[idx++] = value;
-                } catch (...) {}
-            }
-        }
-        existing_yaml.close();
+    cout << "\n已设置 sign_array:" << endl;
+    cout << "  左腿: [";
+    for (int i = 0; i < 5; i++) {
+        cout << setw(2) << sign_array[i];
+        if (i < 4) cout << ", ";
     }
+    cout << "]" << endl;
+    cout << "  右腿: [";
+    for (int i = 5; i < 10; i++) {
+        cout << setw(2) << sign_array[i];
+        if (i < 9) cout << ", ";
+    }
+    cout << "]" << endl;
+    cout << endl;
 
-    // 执行标定
-    if (target_joint >= 0 && target_joint < 10) {
-        // 单关节标定
-        init_pos[target_joint] = calibrate_joint(target_joint, sock_fd, remote_addr, addr_len, calibrated_positions);
-        calibrated_positions[target_joint] = init_pos[target_joint];  // 更新已标定位置
+    // ========== 保存配置文件 ==========
+    string output_file = "robot.yaml";
+    cout << "正在保存配置到: " << output_file << endl;
+
+    if (save_yaml(default_angles, offset, sign_array, output_file)) {
+        cout << "✓ 标定完成！配置已保存到: " << output_file << endl;
+        cout << endl;
+        cout << "下一步建议：" << endl;
+        cout << "  1. 使用 test_init_pose 测试机器人是否能正确回到站立姿态" << endl;
+        cout << "  2. 使用 test_motors 逐关节测试方向是否正确" << endl;
+        cout << "  3. 根据测试结果调整 sign_array" << endl;
     } else {
-        // 全部关节标定
-        for (int i = 0; i < 10 && g_running; i++) {
-            init_pos[i] = calibrate_joint(i, sock_fd, remote_addr, addr_len, calibrated_positions);
-            calibrated_positions[i] = init_pos[i];  // 标定完成后立即更新，下一个关节时保持位置
-
-            if (i < 9 && g_running) {
-                cout << "\n按Enter继续标定下一个关节..." << endl;
-                cin.ignore();  // 清除输入缓冲
-                getchar();
-            }
-        }
+        cerr << "✗ 保存配置文件失败" << endl;
+        return 1;
     }
 
-    if (g_running) {
-        // 保存结果
-        cout << "\n========================================" << endl;
-        cout << "标定结果汇总:" << endl;
-        cout << "========================================" << endl;
-
-        for (int i = 0; i < 10; i++) {
-            cout << "[" << i << "] " << setw(25) << left << JOINT_NAMES[i]
-                 << ": " << fixed << setprecision(4) << setw(8) << init_pos[i]
-                 << " rad (" << setprecision(2) << (init_pos[i] * 180.0 / M_PI)
-                 << " deg)" << endl;
-        }
-
-        cout << "========================================" << endl;
-        cout << "\n保存到文件: " << output << " ... ";
-
-        if (save_yaml(init_pos, output)) {
-            cout << "✓ 成功!" << endl;
-            cout << "\n标定完成！配置文件已生成。" << endl;
-            cout << "现在可以使用 test_motors 或其他程序读取此配置。" << endl;
-        } else {
-            cout << "✗ 失败!" << endl;
-        }
-    }
-
-    disable_raw_mode();
-    close(sock_fd);
     return 0;
 }

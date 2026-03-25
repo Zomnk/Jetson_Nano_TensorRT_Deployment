@@ -36,6 +36,7 @@ set(SOURCES
     src/communication.cpp
     src/trt_inference.cpp
     src/gamepad_input.cpp
+    src/hardware_abstraction.cpp
 )
 
 set(HEADERS
@@ -43,6 +44,7 @@ set(HEADERS
     include/trt_inference.h
     include/types.h
     include/gamepad_input.h
+    include/hardware_abstraction.h
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
@@ -71,10 +73,10 @@ target_include_directories(calibration_tool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
 add_executable(test_udp test/test_udp.cpp)
 target_include_directories(test_udp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-add_executable(test_motors test/test_motors.cpp)
+add_executable(test_motors test/test_motors.cpp src/hardware_abstraction.cpp)
 target_include_directories(test_motors PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-add_executable(test_init_pose test/test_init_pose.cpp)
+add_executable(test_init_pose test/test_init_pose.cpp src/hardware_abstraction.cpp)
 target_include_directories(test_init_pose PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # TensorRT模型测试

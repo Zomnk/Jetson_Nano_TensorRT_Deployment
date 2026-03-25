@@ -1,14 +1,15 @@
 /**
  * @file test_init_pose.cpp
- * @brief 初始姿态测试程序
- * @author Zomnk
- * @date 2026-02-05
+ * @brief 初始姿态测试程序（使用硬件抽象层）
+ * @author Claude Code
+ * @date 2026-03-25
  *
- * @details 本程序用于初次上电后测试各个电机是否正常运行。
+ * @details 本程序用于测试机器人是否能正确回到初始站立姿态。
  *          功能：
- *          1. 从robot.yaml读取各关节的初始位置
- *          2. 通过线性插值平滑移动到初始姿态
- *          3. 到达后保持初始位置不变
+ *          1. 从 robot.yaml 读取硬件配置
+ *          2. 计算初始姿态在 Real 空间的目标位置
+ *          3. 通过线性插值平滑移动到初始姿态
+ *          4. 到达后保持初始位置不变
  *
  * @note 使用方法:
  *       ./test_init_pose [--ip IP] [--port PORT] [--config FILE] [--steps N]
@@ -16,6 +17,7 @@
  * @warning 运行前请确保机器人处于安全状态！
  */
 
+#include "hardware_abstraction.h"
 #include <iostream>
 #include <fstream>
 #include <cstring>
@@ -53,62 +55,6 @@ void signal_handler(int sig) {
     g_running = false;
 }
 
-bool load_init_pose(const string& filename, float init_pos[10]) {
-    ifstream f(filename);
-    if (!f.is_open()) {
-        cerr << "错误: 无法打开配置文件 " << filename << endl;
-        return false;
-    }
-
-    bool in_left_leg = false;
-    bool in_right_leg = false;
-    int count = 0;
-
-    string line;
-    while (getline(f, line)) {
-        size_t first_char = line.find_first_not_of(" \t");
-        if (first_char != string::npos && line[first_char] == '#') continue;
-
-        if (line.find("left_leg:") != string::npos) {
-            in_left_leg = true;
-            in_right_leg = false;
-            continue;
-        }
-        if (line.find("right_leg:") != string::npos) {
-            in_left_leg = false;
-            in_right_leg = true;
-            continue;
-        }
-
-        size_t pos = line.find(':');
-        if (pos == string::npos) continue;
-
-        string val = line.substr(pos + 1);
-        size_t comment = val.find('#');
-        if (comment != string::npos) val = val.substr(0, comment);
-
-        size_t start = val.find_first_not_of(" \t");
-        if (start == string::npos) continue;
-
-        try {
-            float value = stof(val.substr(start));
-            int offset = in_left_leg ? 0 : 5;
-
-            if (line.find("yaw") != string::npos) init_pos[offset + 0] = value;
-            else if (line.find("roll") != string::npos) init_pos[offset + 1] = value;
-            else if (line.find("pitch") != string::npos) init_pos[offset + 2] = value;
-            else if (line.find("knee") != string::npos) init_pos[offset + 3] = value;
-            else if (line.find("ankle") != string::npos) init_pos[offset + 4] = value;
-
-            count++;
-        } catch (...) {
-        }
-    }
-
-    f.close();
-    return count == 10;
-}
-
 int main(int argc, char** argv) {
     string target_ip = "192.168.5.159";
     int port = 10000;
@@ -136,19 +82,54 @@ int main(int argc, char** argv) {
     cout << "  目标: " << target_ip << ":" << port << endl;
     cout << "========================================" << endl;
 
-    // 加载初始姿态
-    float init_pos[10] = {0};
-    if (!load_init_pose(config_file, init_pos)) {
-        cerr << "错误: 无法加载初始姿态" << endl;
+    // 加载硬件配置
+    HardwareAbstraction hw_abstraction;
+    if (!hw_abstraction.loadConfig(config_file)) {
+        cerr << "错误: 无法加载硬件配置" << endl;
         return 1;
     }
+    hw_abstraction.printConfig();
 
-    cout << "已加载初始姿态:" << endl;
+    // 获取配置
+    const auto& hw_config = hw_abstraction.getConfig();
+
+    // 计算初始姿态在 Real 空间的目标位置
+    // 初始姿态在 Sim 空间是 default_angles
+    float target_sim[10];
+    for (int i = 0; i < 10; i++) {
+        target_sim[i] = hw_config.default_angles[i];
+    }
+
+    // 转换到 Real 空间
+    float target_real[10];
+    hw_abstraction.simToReal_position(target_sim, target_real);
+
+    cout << "\n目标姿态 (Sim 空间 - default_angles):" << endl;
     cout << "  左腿: [" << fixed << setprecision(3);
-    for (int i = 0; i < 5; i++) cout << init_pos[i] << " ";
+    for (int i = 0; i < 5; i++) {
+        cout << target_sim[i];
+        if (i < 4) cout << ", ";
+    }
     cout << "]" << endl;
     cout << "  右腿: [";
-    for (int i = 5; i < 10; i++) cout << init_pos[i] << " ";
+    for (int i = 5; i < 10; i++) {
+        cout << target_sim[i];
+        if (i < 9) cout << ", ";
+    }
+    cout << "]" << endl;
+
+    cout << "\n目标姿态 (Real 空间 - 电机命令):" << endl;
+    cout << "  左腿: [";
+    for (int i = 0; i < 5; i++) {
+        cout << target_real[i];
+        if (i < 4) cout << ", ";
+    }
+    cout << "]" << endl;
+    cout << "  右腿: [";
+    for (int i = 5; i < 10; i++) {
+        cout << target_real[i];
+        if (i < 9) cout << ", ";
+    }
     cout << "]" << endl;
 
     // 创建UDP socket
@@ -221,7 +202,7 @@ int main(int argc, char** argv) {
         float alpha = (float)step / steps;
 
         for (int i = 0; i < 10; i++) {
-            response.q_exp[i] = current_pos[i] + alpha * (init_pos[i] - current_pos[i]);
+            response.q_exp[i] = current_pos[i] + alpha * (target_real[i] - current_pos[i]);
         }
 
         sendto(sock, (char*)&response, sizeof(response), 0,
@@ -245,7 +226,7 @@ int main(int argc, char** argv) {
     int loop_count = 0;
     while (g_running) {
         for (int i = 0; i < 10; i++) {
-            response.q_exp[i] = init_pos[i];
+            response.q_exp[i] = target_real[i];
         }
 
         sendto(sock, (char*)&response, sizeof(response), 0,

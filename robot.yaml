@@ -1,9 +1,36 @@
-# 双足机器人初始姿态标定数据
-# 生成时间: Feb  7 2026 16:31:48
-# 单位: 弧度 (rad)
+# 双足机器人 Sim-to-Real 配置文件
+# 生成时间: 2026-03-25
+# 单位: 弧度 (rad) 和方向系数
 
 robot_config:
-  init_pose:
+  # ========================================
+  # 算法层基准姿态 (default_angles)
+  # ========================================
+  # 说明：这是训练环境中使用的基准姿态，通常来自训练时的 default_joint_angles
+  # 注意：这个值应该与训练环境保持一致，不是实机标定时读到的编码器值
+  # 如果训练使用对称站立姿态，通常设为全0或对称值
+  default_angles:
+    left_leg:
+      yaw:   0.0  # rad
+      roll:  0.0  # rad
+      pitch: 0.0  # rad
+      knee:  0.0  # rad
+      ankle: 0.0  # rad
+    right_leg:
+      yaw:   0.0  # rad
+      roll:  0.0  # rad
+      pitch: 0.0  # rad
+      knee:  0.0  # rad
+      ankle: 0.0  # rad
+
+  # ========================================
+  # 硬件零点偏置 (offset)
+  # ========================================
+  # 说明：offset = q_encoder_stand - default_angles
+  # 其中 q_encoder_stand 是让机器人处于 default_angles 姿态时的编码器读数
+  # offset 用于补偿硬件装配误差和编码器零点偏置
+  # 通过 calibration_tool 标定获得
+  offset:
     left_leg:
       yaw:   0.000000  # rad
       roll:  0.000000  # rad
@@ -13,11 +40,49 @@ robot_config:
     right_leg:
       yaw:   0.000000  # rad
       roll:  0.000000  # rad
-      pitch: -0.18000  # rad
-      knee:  -1.11000  # rad
-      ankle: -0.92000  # rad
+      pitch: -0.180000  # rad
+      knee:  -1.110000  # rad
+      ankle: -0.920000  # rad
 
-  # 说明:
-  # - 此文件由 calibration_tool 工具生成
-  # - 请勿手动修改，除非了解参数含义
-  # - 重新标定会覆盖此文件
+  # ========================================
+  # 关节方向映射 (sign_array)
+  # ========================================
+  # 说明：定义每个关节的旋转方向
+  # 1 = 与训练环境方向一致
+  # -1 = 与训练环境方向相反
+  # 注意：这个值需要根据实际硬件装配和训练环境确定
+  sign_array:
+    left_leg:
+      yaw:   1  # 1 or -1
+      roll:  1  # 1 or -1
+      pitch: 1  # 1 or -1
+      knee:  1  # 1 or -1
+      ankle: 1  # 1 or -1
+    right_leg:
+      yaw:   1  # 1 or -1
+      roll:  1  # 1 or -1
+      pitch: 1  # 1 or -1
+      knee:  1  # 1 or -1
+      ankle: 1  # 1 or -1
+
+# ========================================
+# 使用说明
+# ========================================
+# 1. default_angles: 从训练环境获取，保持与训练时一致
+# 2. offset: 通过 calibration_tool 标定获得
+# 3. sign_array: 根据实际硬件装配确定，需要逐关节测试验证
+#
+# 坐标变换关系：
+# - 观测链路 (Real → Sim):
+#   q_sim = (q_real - offset) * sign_array
+#   dq_sim = dq_real * sign_array
+#   其中 offset = q_encoder_stand - default_angles
+#
+# - 控制链路 (Sim → Real):
+#   q_real = q_sim * sign_array + offset
+#   其中 q_sim = action * scale + default_angles
+#
+# 重要提示：
+# - 修改 default_angles 前请确认训练环境的基准姿态
+# - 修改 sign_array 前请进行单关节测试验证
+# - offset 值应通过标定工具自动生成，不建议手动修改

@@ -1,0 +1,23 @@
+# 双足机器人初始姿态标定数据
+# 生成时间: Feb  7 2026 16:31:48
+# 单位: 弧度 (rad)
+
+robot_config:
+  init_pose:
+    left_leg:
+      yaw:   0.000000  # rad
+      roll:  0.000000  # rad
+      pitch: 0.180000  # rad
+      knee:  1.110000  # rad
+      ankle: 0.920000  # rad
+    right_leg:
+      yaw:   0.000000  # rad
+      roll:  0.000000  # rad
+      pitch: -0.18000  # rad
+      knee:  -1.11000  # rad
+      ankle: -0.92000  # rad
+
+  # 说明:
+  # - 此文件由 calibration_tool 工具生成
+  # - 请勿手动修改，除非了解参数含义
+  # - 重新标定会覆盖此文件

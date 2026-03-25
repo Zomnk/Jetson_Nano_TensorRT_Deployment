@@ -19,6 +19,7 @@
 #include "communication.h"
 #include "trt_inference.h"
 #include "gamepad_input.h"
+#include "hardware_abstraction.h"
 #include <iostream>
 #include <iomanip>
 #include <fstream>
@@ -322,13 +323,13 @@ int main(int argc, char** argv) {
     std::cout << "  目标: " << target_ip << ":" << port << std::endl;
     std::cout << "========================================" << std::endl;
 
-    // ========== 加载标定配置 ==========
-    float calibrated_init_pos[10] = {0};
-    if (loadCalibration(config_file, calibrated_init_pos)) {
-        std::cout << "已加载标定文件: " << config_file << std::endl;
-    } else {
-        std::cout << "未找到标定文件，使用默认值" << std::endl;
+    // ========== 加载硬件配置 ==========
+    HardwareAbstraction hw_abstraction;
+    std::cout << "正在加载硬件配置..." << std::endl;
+    if (!hw_abstraction.loadConfig(config_file)) {
+        std::cerr << "硬件配置加载失败，使用默认值" << std::endl;
     }
+    hw_abstraction.printConfig();
 
     // ========== 初始化UDP通信 ==========
     UDPCommunication udp(target_ip, port);
@@ -344,9 +345,19 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // ========== 设置初始姿态并移动 ==========
-    inference.setInitPose(calibrated_init_pos);
-    moveToInitPose(udp, calibrated_init_pos);
+    // ========== 设置硬件配置到推理器 ==========
+    const auto& hw_config = hw_abstraction.getConfig();
+    inference.setHardwareConfig(
+        hw_config.default_angles.data(),
+        hw_config.offset.data(),
+        hw_config.sign_array.data()
+    );
+
+    // ========== 计算初始姿态（Real空间）并移动 ==========
+    // 初始姿态在 Sim 空间是 default_angles，需要转换到 Real 空间
+    float init_pose_real[10];
+    hw_abstraction.simToReal_position(hw_config.default_angles.data(), init_pose_real);
+    moveToInitPose(udp, init_pose_real);
 
     // ========== 初始化手柄输入 ==========
     GamepadInput gamepad;
@@ -369,7 +380,7 @@ int main(int argc, char** argv) {
     // ========== 问题1: 用init_pos初始化response ==========
     // 避免第一个数据包发送零位置指令
     for (int i = 0; i < ACTION_DIM; ++i) {
-        response.q_exp[i] = calibrated_init_pos[i];
+        response.q_exp[i] = init_pose_real[i];
     }
 
     int loop_count = 0;   // 循环计数
@@ -389,9 +400,9 @@ int main(int argc, char** argv) {
             std::fill(last_action, last_action + ACTION_DIM, 0.0f);
             std::memset(&response, 0, sizeof(response));
             for (int i = 0; i < ACTION_DIM; ++i) {
-                response.q_exp[i] = calibrated_init_pos[i];
+                response.q_exp[i] = init_pose_real[i];
             }
-            moveToInitPose(udp, calibrated_init_pos);
+            moveToInitPose(udp, init_pose_real);
             continue;
         }
 
@@ -430,18 +441,19 @@ int main(int argc, char** argv) {
             // ========== 推理失败、trigger!=1.0或输出有NaN时的处理 ==========
             if (infer_success && !has_nan) {
                 // 推理成功且无NaN，使用推理结果
+                // 注意：action 已经在 infer() 中完成了 Sim→Real 映射
+                // 映射公式：q_real = (action * 0.25 + default_angles) * sign_array + offset
+                // 其中 offset = q_encoder_stand - default_angles
+                // 这里直接使用，不再需要额外的转换
                 for (int i = 0; i < ACTION_DIM; ++i) {
                     // 应用滤波: 0.8*current_action + 0.2*last_action
                     float filtered = 0.8f * action[i] + 0.2f * last_action[i];
 
-                    // 转换为电机指令: action = action_flt * 0.25 + init_pos
-                    float motor_cmd = filtered * 0.25f + calibrated_init_pos[i];
-
                     // 限制范围
-                    if (motor_cmd < -5.0f) motor_cmd = -5.0f;
-                    if (motor_cmd > 5.0f) motor_cmd = 5.0f;
+                    if (filtered < -5.0f) filtered = -5.0f;
+                    if (filtered > 5.0f) filtered = 5.0f;
 
-                    response.q_exp[i] = motor_cmd;
+                    response.q_exp[i] = filtered;
                     last_action[i] = action[i];  // 保存原始action用于下一次滤波
                 }
                 infer_count++;
@@ -505,12 +517,12 @@ int main(int argc, char** argv) {
                 }
 
                 std::cout << "正在回到初始姿态..." << std::endl;
-                moveToInitPose(udp, calibrated_init_pos);
+                moveToInitPose(udp, init_pose_real);
 
                 // 重新初始化response
                 std::memset(&response, 0, sizeof(response));
                 for (int i = 0; i < ACTION_DIM; ++i) {
-                    response.q_exp[i] = calibrated_init_pos[i];
+                    response.q_exp[i] = init_pose_real[i];
                 }
 
                 std::cout << "已回到初始姿态，重新开始控制循环" << std::endl;

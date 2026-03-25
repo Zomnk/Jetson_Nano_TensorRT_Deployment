@@ -47,8 +47,10 @@ TRTInference::TRTInference()
     , d_output_(nullptr)        // GPU输出缓冲区
     , cmd_x_(0), cmd_y_(0), cmd_rate_(0)  // 滤波后的控制指令
     , engine_loaded_(false) {   // 引擎未加载
-    // 初始化初始姿态为全零
-    std::fill(init_pos_, init_pos_ + DOF_NUM, 0.0f);
+    // 初始化硬件配置为默认值
+    std::fill(default_angles_, default_angles_ + DOF_NUM, 0.0f);
+    std::fill(offset_, offset_ + DOF_NUM, 0.0f);
+    std::fill(sign_array_, sign_array_ + DOF_NUM, 1);
     // 初始化上次动作为全零
     std::fill(last_action_, last_action_ + ACTION_DIM, 0.0f);
     // 初始化临时动作缓存为全零
@@ -155,15 +157,33 @@ bool TRTInference::loadEngine(const std::string& engine_path) {
 }
 
 /**
- * @brief 设置初始站立姿态
+ * @brief 设置硬件配置（用于 Sim-to-Real 映射）
  *
- * @details 将标定的初始姿态保存到成员变量。
- *          初始姿态用于计算关节位置偏差（观测向量的一部分）。
+ * @details 保存硬件配置参数，用于在观测和控制链路中进行坐标变换。
+ *          这些参数通常从 robot.yaml 加载。
+ *
+ * @param default_angles 算法层基准姿态（10个关节）
+ * @param offset 硬件零点偏置（10个关节）
+ * @param sign_array 关节方向映射（10个关节，1 或 -1）
+ */
+void TRTInference::setHardwareConfig(const float* default_angles,
+                                     const float* offset,
+                                     const int* sign_array) {
+    std::copy(default_angles, default_angles + DOF_NUM, default_angles_);
+    std::copy(offset, offset + DOF_NUM, offset_);
+    std::copy(sign_array, sign_array + DOF_NUM, sign_array_);
+}
+
+/**
+ * @brief 设置初始站立姿态（已废弃，保留用于向后兼容）
+ *
+ * @details 此方法已被 setHardwareConfig() 替代。
+ *          为保持向后兼容，此方法将 init_pos 设置为 offset。
  *
  * @param init_pos 10个关节的初始位置数组
  */
 void TRTInference::setInitPose(const float* init_pos) {
-    std::copy(init_pos, init_pos + DOF_NUM, init_pos_);
+    std::copy(init_pos, init_pos + DOF_NUM, offset_);
 }
 
 /**
@@ -245,14 +265,21 @@ void TRTInference::buildObservation(const MsgRequest& request, float* obs) {
     obs[idx++] = cmd_rate_ * ANG_VEL_SCALE;   // 转向速度指令
 
     // ========== [9-18] 关节位置偏差 ==========
-    // 当前关节位置相对于初始姿态的偏差
-    for (int i = 0; i < DOF_NUM; ++i)
-        obs[idx++] = (request.q[i] - init_pos_[i]) * POS_SCALE;
+    // 应用 Real→Sim 映射，然后计算相对于 default_angles 的偏差
+    // q_sim = (q_real - offset) * sign_array
+    // obs = (q_sim - default_angles) * POS_SCALE
+    for (int i = 0; i < DOF_NUM; ++i) {
+        float q_sim = (request.q[i] - offset_[i]) * sign_array_[i];
+        obs[idx++] = (q_sim - default_angles_[i]) * POS_SCALE;
+    }
 
     // ========== [19-28] 关节速度 ==========
-    // 当前关节角速度
-    for (int i = 0; i < DOF_NUM; ++i)
-        obs[idx++] = request.dq[i] * VEL_SCALE;
+    // 应用 Real→Sim 映射
+    // dq_sim = dq_real * sign_array
+    for (int i = 0; i < DOF_NUM; ++i) {
+        float dq_sim = request.dq[i] * sign_array_[i];
+        obs[idx++] = dq_sim * VEL_SCALE;
+    }
 
     // ========== [29-38] 上次动作 ==========
     // 上一个控制周期输出的动作（使用限幅后的值，与LibTorch版本一致）
@@ -342,14 +369,22 @@ bool TRTInference::infer(const MsgRequest& request, float* action_out) {
         // 限幅: 将动作限制在[-15, 15]范围内
         float clamped = blended < -15.0f ? -15.0f : (blended > 15.0f ? 15.0f : blended);
 
-        // 输出动作
-        action_out[i] = clamped;
-
         // 保存原始输出用于下次滤波
         last_action_[i] = output[i];
 
         // 保存限幅后的值用于下次观测构建（与LibTorch版本一致）
         action_temp_[i] = clamped;
+    }
+
+    // ========== 应用 Sim→Real 映射 ==========
+    // 将算法空间的动作转换为电机空间的命令
+    // 1. 先将动作缩放并加上 default_angles，得到 Sim 空间的目标位置
+    // 2. 然后应用 sign 和 offset，转换为 Real 空间的电机命令
+    // 公式：q_real = (action * 0.25 + default_angles) * sign_array + offset
+    // 其中 offset = q_encoder_stand - default_angles
+    for (int i = 0; i < ACTION_DIM; ++i) {
+        float q_sim_target = action_temp_[i] * 0.25f + default_angles_[i];
+        action_out[i] = q_sim_target * sign_array_[i] + offset_[i];
     }
 
     // 保存观测向量用于调试输出

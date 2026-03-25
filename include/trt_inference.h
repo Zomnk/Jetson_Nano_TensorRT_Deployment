@@ -56,13 +56,16 @@ public:
     bool loadEngine(const std::string& engine_path);
 
     /**
-     * @brief 设置初始站立姿态
-     * @param init_pos 10个关节的初始位置数组
+     * @brief 设置硬件配置（用于 Sim-to-Real 映射）
+     * @param default_angles 算法层基准姿态（10个关节）
+     * @param offset 硬件零点偏置（10个关节）
+     * @param sign_array 关节方向映射（10个关节，1 或 -1）
      *
-     * @details 初始姿态用于计算关节位置偏差，
-     *          通常从robot.yaml标定文件加载。
+     * @details 这些参数用于在观测和控制链路中进行坐标变换
      */
-    void setInitPose(const float* init_pos);
+    void setHardwareConfig(const float* default_angles,
+                          const float* offset,
+                          const int* sign_array);
 
     /**
      * @brief 重置推理状态
@@ -142,7 +145,9 @@ private:
      * 状态缓存
      * ============================================================
      */
-    float init_pos_[DOF_NUM];       ///< 初始站立姿态（标定值）
+    float default_angles_[DOF_NUM]; ///< 算法层基准姿态（训练时的默认姿态）
+    float offset_[DOF_NUM];         ///< 硬件零点偏置（每台机器独立标定）
+    int sign_array_[DOF_NUM];       ///< 关节方向映射（1 或 -1）
     float last_action_[ACTION_DIM]; ///< 上次动作（用于观测和滤波）
     float action_temp_[ACTION_DIM]; ///< 临时动作缓存（限幅后，用于观测构建）
     float cmd_x_, cmd_y_, cmd_rate_;///< 滤波后的控制指令
