@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
     std::vector<std::vector<float>> all_rows;
     std::string line;
     int row_count = 0;
-    while (std::getline(csv_file, line) && row_count < 100) {
+    while (std::getline(csv_file, line) && row_count < 200) {
         auto values = parseCSVLine(line);
         all_rows.push_back(values);
         row_count++;
@@ -111,24 +111,44 @@ int main(int argc, char** argv) {
     std::cout << "读取了 " << row_count << " 行数据\n" << std::endl;
 
     // ========== 对每一行进行推理 ==========
+    float total_max_error = 0.0f;
+    float total_mean_error = 0.0f;
+    float total_max_rel_error = 0.0f;
+    int error_count = 0;
+
     for (int row_idx = 0; row_idx < row_count; row_idx++) {
         auto& row = all_rows[row_idx];
 
-        // 提取 t0 (前39维)
-        std::vector<float> prop(row.begin(), row.begin() + PROP_DIM);
+        // 新 CSV 格式：step(1) + obs(390) + act(10)
+        // 跳过第一列 step，从第二列开始是观测数据
 
-        // 提取 history (390维，从列39开始)
-        // 注意：CSV中的结构是 t0(39) + priv(44) + scan(187) + history(390) + actions(10)
-        // history 从列 39+44+187=270 开始
-        int history_start = 39 + 44 + 187;
-        std::vector<float> history(row.begin() + history_start,
-                                   row.begin() + history_start + HISTORY_DIM);
+        // 提取当前观测 (前39维，从列1开始)
+        std::vector<float> prop(row.begin() + 1, row.begin() + 1 + PROP_DIM);
+
+        // 提取历史观测缓存 (390维，从列40开始)
+        // 注意：新 CSV 中的结构是 step(1) + obs(390) + act(10)
+        // 其中 obs(390) = 当前观测(39) + 历史观测缓存(351)
+        // 但实际上 obs(390) 已经包含了完整的 10 帧历史
+        // 所以我们需要从列1开始取390维作为完整的观测输入
+        std::vector<float> full_obs(row.begin() + 1, row.begin() + 1 + 390);
+
+        // 当前观测 (前39维)
+        std::vector<float> prop_current(full_obs.begin(), full_obs.begin() + PROP_DIM);
+
+        // 历史观测缓存 (后351维，需要补充到390维)
+        // 实际上 obs(390) 中包含了 10 帧的历史，每帧 39 维
+        // 所以直接使用 full_obs 的后 351 维作为历史缓存的一部分
+        std::vector<float> history(full_obs.begin() + PROP_DIM, full_obs.end());
+        // 如果历史缓存不足 390 维，用零填充
+        while (history.size() < HISTORY_DIM) {
+            history.push_back(0.0f);
+        }
 
         // 提取仿真中的真实 action (最后10维)
         std::vector<float> gt_action(row.end() - OUTPUT_DIM, row.end());
 
         // 拷贝到GPU
-        cudaMemcpyAsync(d_prop, prop.data(), PROP_DIM * sizeof(float),
+        cudaMemcpyAsync(d_prop, prop_current.data(), PROP_DIM * sizeof(float),
                         cudaMemcpyHostToDevice, stream);
         cudaMemcpyAsync(d_history, history.data(), HISTORY_DIM * sizeof(float),
                         cudaMemcpyHostToDevice, stream);
@@ -161,17 +181,38 @@ int main(int argc, char** argv) {
         // 计算误差
         float max_error = 0.0f;
         float mean_error = 0.0f;
+        float max_rel_error = 0.0f;
         for (int i = 0; i < OUTPUT_DIM; i++) {
             float error = std::abs(infer_action[i] - gt_action[i]);
             max_error = std::max(max_error, error);
             mean_error += error;
+
+            // 计算相对误差
+            if (std::abs(gt_action[i]) > 1e-6) {
+                float rel_error = error / std::abs(gt_action[i]);
+                max_rel_error = std::max(max_rel_error, rel_error);
+            }
         }
         mean_error /= OUTPUT_DIM;
 
         std::cout << "最大误差: " << std::fixed << std::setprecision(6) << max_error << std::endl;
         std::cout << "平均误差: " << std::fixed << std::setprecision(6) << mean_error << std::endl;
+        std::cout << "最大相对误差: " << std::fixed << std::setprecision(6) << max_rel_error << std::endl;
         std::cout << std::endl;
+
+        // 累计统计
+        total_max_error += max_error;
+        total_mean_error += mean_error;
+        total_max_rel_error += max_rel_error;
+        error_count++;
     }
+
+    // ========== 打印总体统计 ==========
+    std::cout << "\n========== 总体统计 ==========" << std::endl;
+    std::cout << "测试样本数: " << error_count << std::endl;
+    std::cout << "平均最大误差: " << std::fixed << std::setprecision(6) << (total_max_error / error_count) << std::endl;
+    std::cout << "平均平均误差: " << std::fixed << std::setprecision(6) << (total_mean_error / error_count) << std::endl;
+    std::cout << "平均最大相对误差: " << std::fixed << std::setprecision(6) << (total_max_rel_error / error_count) << std::endl;
 
     // ========== 清理资源 ==========
     cudaFree(d_prop);
