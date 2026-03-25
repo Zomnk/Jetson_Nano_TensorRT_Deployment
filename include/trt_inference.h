@@ -108,6 +108,16 @@ public:
 
 private:
     /**
+     * @brief 从欧拉角计算投影重力向量
+     * @param eu_ang 欧拉角 [roll, pitch, yaw]
+     * @param gravity_proj 输出的投影重力向量
+     *
+     * @details 投影重力向量是重力在机器人坐标系中的投影
+     *          用于表示机器人的倾斜状态
+     */
+    void computeProjectedGravity(const float eu_ang[3], float gravity_proj[3]);
+
+    /**
      * @brief 构建观测向量
      * @param request 请求消息
      * @param obs 输出的观测数组（39维）
@@ -172,17 +182,17 @@ private:
 
     /*
      * ============================================================
-     * 缩放参数（与训练时保持一致）
+     * 缩放参数（与 IsaacLab 训练保持一致）
      * ============================================================
      */
-    static constexpr float OMEGA_SCALE = 0.25f;     ///< 角速度缩放系数
+    static constexpr float OMEGA_SCALE = 1.0f;      ///< 角速度缩放系数（改为 1.0，适配 IsaacLab）
     static constexpr float EU_ANG_SCALE = 1.0f;     ///< 欧拉角缩放系数
     static constexpr float POS_SCALE = 1.0f;        ///< 位置缩放系数
-    static constexpr float VEL_SCALE = 0.05f;       ///< 速度缩放系数
-    static constexpr float LIN_VEL_SCALE = 2.0f;    ///< 线速度指令缩放系数
-    static constexpr float ANG_VEL_SCALE = 0.25f;   ///< 角速度指令缩放系数
-    static constexpr float SMOOTH = 0.03f;          ///< 控制指令平滑系数
-    static constexpr float DEAD_ZONE = 0.01f;       ///< 控制指令死区
+    static constexpr float VEL_SCALE = 1.0f;        ///< 速度缩放系数（改为 1.0，适配 IsaacLab）
+    static constexpr float LIN_VEL_SCALE = 1.0f;    ///< 线速度指令缩放系数（改为 1.0，适配 IsaacLab）
+    static constexpr float ANG_VEL_SCALE = 1.0f;    ///< 角速度指令缩放系数（改为 1.0，适配 IsaacLab）
+    static constexpr float SMOOTH = 0.0f;           ///< 控制指令平滑系数（改为 0.0，禁用滤波）
+    static constexpr float DEAD_ZONE = 0.0f;        ///< 控制指令死区（改为 0.0，禁用死区）
 
     bool engine_loaded_;    ///< 引擎加载状态标志
 };

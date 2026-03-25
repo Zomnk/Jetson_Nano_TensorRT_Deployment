@@ -220,6 +220,28 @@ float TRTInference::applyDeadzone(float value, float deadzone) {
 }
 
 /**
+ * @brief 从欧拉角计算投影重力向量
+ *
+ * @details 投影重力向量 = R^T * [0, 0, -g]
+ *          其中 R 是从欧拉角构建的旋转矩阵
+ *          结果是重力在机器人坐标系中的投影
+ */
+void TRTInference::computeProjectedGravity(const float eu_ang[3], float gravity_proj[3]) {
+    float roll = eu_ang[0];
+    float pitch = eu_ang[1];
+
+    float cos_roll = std::cos(roll);
+    float sin_roll = std::sin(roll);
+    float cos_pitch = std::cos(pitch);
+    float sin_pitch = std::sin(pitch);
+
+    // 投影重力向量（在机器人坐标系中）
+    gravity_proj[0] = sin_pitch;
+    gravity_proj[1] = -sin_roll * cos_pitch;
+    gravity_proj[2] = -cos_roll * cos_pitch;
+}
+
+/**
  * @brief 构建观测向量
  *
  * @details 将机器人状态转换为39维观测向量，作为神经网络的输入。
@@ -243,46 +265,47 @@ void TRTInference::buildObservation(const MsgRequest& request, float* obs) {
     int idx = 0;
 
     // ========== [0-2] 角速度 ==========
-    // IMU测量的机身角速度，乘以缩放系数
+    // IMU测量的机身角速度，乘以缩放系数（现在为 1.0，适配 IsaacLab）
     obs[idx++] = request.omega[0] * OMEGA_SCALE;
     obs[idx++] = request.omega[1] * OMEGA_SCALE;
     obs[idx++] = request.omega[2] * OMEGA_SCALE;
 
-    // ========== [3-5] 欧拉角 ==========
-    // IMU测量的机身姿态角
-    obs[idx++] = request.eu_ang[0] * EU_ANG_SCALE;
-    obs[idx++] = request.eu_ang[1] * EU_ANG_SCALE;
-    obs[idx++] = request.eu_ang[2] * EU_ANG_SCALE;
+    // ========== [3-5] 投影重力向量 ==========
+    // 改为使用投影重力向量而不是欧拉角，适配 IsaacLab
+    float gravity_proj[3];
+    computeProjectedGravity(request.eu_ang, gravity_proj);
+    obs[idx++] = gravity_proj[0];
+    obs[idx++] = gravity_proj[1];
+    obs[idx++] = gravity_proj[2];
 
     // ========== [6-8] 控制指令 ==========
-    // 来自遥控器或手柄覆盖后的速度指令，应用死区和一阶低通滤波
-    // 滤波公式: y = y * (1 - α) + x * α，其中α = SMOOTH = 0.03
-    cmd_x_ = cmd_x_ * (1 - SMOOTH) + applyDeadzone(request.command[0], DEAD_ZONE) * SMOOTH;
-    cmd_y_ = cmd_y_ * (1 - SMOOTH) + applyDeadzone(request.command[1], DEAD_ZONE) * SMOOTH;
-    cmd_rate_ = cmd_rate_ * (1 - SMOOTH) + applyDeadzone(request.command[2], DEAD_ZONE) * SMOOTH;
-    obs[idx++] = cmd_x_ * LIN_VEL_SCALE;      // 前进速度指令
-    obs[idx++] = cmd_y_ * LIN_VEL_SCALE;      // 侧移速度指令
-    obs[idx++] = cmd_rate_ * ANG_VEL_SCALE;   // 转向速度指令
+    // 改为直接使用控制指令，不进行死区、滤波、缩放，适配 IsaacLab
+    obs[idx++] = request.command[0];
+    obs[idx++] = request.command[1];
+    obs[idx++] = request.command[2];
 
     // ========== [9-18] 关节位置偏差 ==========
     // 应用 Real→Sim 映射，然后计算相对于 default_angles 的偏差
+    // 改为应用方向掩码（sign_array），适配 IsaacLab
     // q_sim = (q_real - offset) * sign_array
-    // obs = (q_sim - default_angles) * POS_SCALE
+    // obs = (q_sim - default_angles) * sign_array
     for (int i = 0; i < DOF_NUM; ++i) {
         float q_sim = (request.q[i] - offset_[i]) * sign_array_[i];
-        obs[idx++] = (q_sim - default_angles_[i]) * POS_SCALE;
+        obs[idx++] = (q_sim - default_angles_[i]) * sign_array_[i];
     }
 
     // ========== [19-28] 关节速度 ==========
     // 应用 Real→Sim 映射
+    // 改为应用方向掩码（sign_array），适配 IsaacLab
     // dq_sim = dq_real * sign_array
+    // obs = dq_sim * sign_array
     for (int i = 0; i < DOF_NUM; ++i) {
         float dq_sim = request.dq[i] * sign_array_[i];
-        obs[idx++] = dq_sim * VEL_SCALE;
+        obs[idx++] = dq_sim * sign_array_[i];
     }
 
     // ========== [29-38] 上次动作 ==========
-    // 上一个控制周期输出的动作（使用限幅后的值，与LibTorch版本一致）
+    // 上一个控制周期输出的动作（使用限幅后的值，与 LibTorch 版本一致）
     for (int i = 0; i < ACTION_DIM; ++i)
         obs[idx++] = action_temp_[i];
 }
@@ -362,18 +385,14 @@ bool TRTInference::infer(const MsgRequest& request, float* action_out) {
     }
 
     // ========== 动作后处理 ==========
+    // 改为直接使用网络输出，不进行滤波和限幅，适配 IsaacLab
     for (int i = 0; i < ACTION_DIM; ++i) {
-        // 动作滤波: 80%新动作 + 20%旧动作，使动作更平滑
-        float blended = 0.8f * output[i] + 0.2f * last_action_[i];
+        // 直接使用网络输出，不进行 80%新+20%旧 的混合
+        float processed = output[i];
 
-        // 限幅: 将动作限制在[-15, 15]范围内
-        float clamped = blended < -15.0f ? -15.0f : (blended > 15.0f ? 15.0f : blended);
-
-        // 保存原始输出用于下次滤波
+        // 保存用于下次观测
+        action_temp_[i] = processed;
         last_action_[i] = output[i];
-
-        // 保存限幅后的值用于下次观测构建（与LibTorch版本一致）
-        action_temp_[i] = clamped;
     }
 
     // ========== 应用 Sim→Real 映射 ==========

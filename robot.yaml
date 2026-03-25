@@ -13,15 +13,15 @@ robot_config:
     left_leg:
       yaw:   0.0  # rad
       roll:  0.0  # rad
-      pitch: 0.0  # rad
-      knee:  0.0  # rad
-      ankle: 0.0  # rad
+      pitch: 0.18  # rad (IsaacLab 初始姿态)
+      knee:  1.11  # rad (IsaacLab 初始姿态)
+      ankle: 0.92  # rad (IsaacLab 初始姿态)
     right_leg:
       yaw:   0.0  # rad
       roll:  0.0  # rad
-      pitch: 0.0  # rad
-      knee:  0.0  # rad
-      ankle: 0.0  # rad
+      pitch: -0.18  # rad (IsaacLab 初始姿态)
+      knee:  -1.11  # rad (IsaacLab 初始姿态)
+      ankle: -0.92  # rad (IsaacLab 初始姿态)
 
   # ========================================
   # 硬件零点偏置 (offset)
@@ -53,17 +53,17 @@ robot_config:
   # 注意：这个值需要根据实际硬件装配和训练环境确定
   sign_array:
     left_leg:
-      yaw:   1  # 1 or -1
-      roll:  1  # 1 or -1
-      pitch: 1  # 1 or -1
-      knee:  1  # 1 or -1
-      ankle: 1  # 1 or -1
+      yaw:   1  # 1 or -1 (IsaacLab: +1)
+      roll:  1  # 1 or -1 (IsaacLab: +1)
+      pitch: 1  # 1 or -1 (IsaacLab: +1)
+      knee:  1  # 1 or -1 (IsaacLab: +1)
+      ankle: 1  # 1 or -1 (IsaacLab: +1)
     right_leg:
-      yaw:   1  # 1 or -1
-      roll:  1  # 1 or -1
-      pitch: 1  # 1 or -1
-      knee:  1  # 1 or -1
-      ankle: 1  # 1 or -1
+      yaw:   1  # 1 or -1 (IsaacLab: +1)
+      roll:  -1  # 1 or -1 (IsaacLab: -1)
+      pitch: -1  # 1 or -1 (IsaacLab: -1)
+      knee:  -1  # 1 or -1 (IsaacLab: -1)
+      ankle: -1  # 1 or -1 (IsaacLab: -1)
 
 # ========================================
 # 使用说明
