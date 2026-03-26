@@ -118,19 +118,33 @@ private:
     void computeProjectedGravity(const float eu_ang[3], float gravity_proj[3]);
 
     /**
-     * @brief 构建观测向量
+     * @brief 构建当前帧观测向量
      * @param request 请求消息
      * @param obs 输出的观测数组（39维）
      *
-     * @details 观测向量组成：
-     *          [0-2]   角速度 * OMEGA_SCALE
-     *          [3-5]   欧拉角 * EU_ANG_SCALE
-     *          [6-8]   控制指令（带死区和平滑滤波）
-     *          [9-18]  关节位置偏差 * POS_SCALE
-     *          [19-28] 关节速度 * VEL_SCALE
-     *          [29-38] 上次动作
+     * @details 当前帧观测组成：
+     *          [0-2]   base_ang_vel
+     *          [3-5]   projected_gravity
+     *          [6-8]   velocity_commands
+     *          [9-18]  joint_pos
+     *          [19-28] joint_vel
+     *          [29-38] last_action
      */
     void buildObservation(const MsgRequest& request, float* obs);
+
+    /**
+     * @brief 按 IsaacLab 的 term-major 方式更新历史缓存
+     * @param obs 当前帧观测（39维）
+     *
+     * @details 历史缓存布局为 390 维：
+     *          [0-29]    base_ang_vel 的 10 帧历史（每帧 3 维）
+     *          [30-59]   projected_gravity 的 10 帧历史（每帧 3 维）
+     *          [60-89]   velocity_commands 的 10 帧历史（每帧 3 维）
+     *          [90-189]  joint_pos 的 10 帧历史（每帧 10 维）
+     *          [190-289] joint_vel 的 10 帧历史（每帧 10 维）
+     *          [290-389] last_action 的 10 帧历史（每帧 10 维）
+     */
+    void updateHistoryBuffer(const float* obs);
 
     /**
      * @brief 应用死区
