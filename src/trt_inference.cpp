@@ -42,7 +42,6 @@ public:
  */
 TRTInference::TRTInference()
     : stream_(nullptr)          // CUDA流
-    , d_input_(nullptr)         // GPU输入缓冲区 - 当前观测
     , d_obs_buf_(nullptr)       // GPU输入缓冲区 - 历史观测缓存
     , d_output_(nullptr)        // GPU输出缓冲区
     , cmd_x_(0), cmd_y_(0), cmd_rate_(0)  // 滤波后的控制指令
@@ -77,8 +76,6 @@ TRTInference::TRTInference()
  *          TensorRT对象由unique_ptr自动管理
  */
 TRTInference::~TRTInference() {
-    // 释放GPU输入缓冲区 - 当前观测
-    if (d_input_) cudaFree(d_input_);
     // 释放GPU输入缓冲区 - 历史观测缓存
     if (d_obs_buf_) cudaFree(d_obs_buf_);
     // 释放GPU输出缓冲区
@@ -147,9 +144,7 @@ bool TRTInference::loadEngine(const std::string& engine_path) {
     cudaStreamCreate(&stream_);
 
     // ========== 步骤6: 分配GPU内存 ==========
-    // 输入缓冲区1: 39个float (当前观测向量)
-    cudaMalloc(&d_input_, OBS_DIM * sizeof(float));
-    // 输入缓冲区2: HISTORY_LENGTH * 39个float (历史观测缓存)
+    // 输入缓冲区: 390个float (历史观测缓存, term-major)
     cudaMalloc(&d_obs_buf_, HISTORY_LENGTH * OBS_DIM * sizeof(float));
     // 输出缓冲区: 10个float (动作向量)
     cudaMalloc(&d_output_, ACTION_DIM * sizeof(float));
@@ -440,26 +435,23 @@ bool TRTInference::infer(const MsgRequest& request, float* action_out) {
     buildObservation(request, obs);
 
     // ========== 拷贝数据到GPU ==========
-    // 拷贝当前观测到GPU
-    cudaMemcpyAsync(d_input_, obs, OBS_DIM * sizeof(float), cudaMemcpyHostToDevice, stream_);
-    // 拷贝历史观测缓存到GPU
+    // 拷贝历史观测缓存到GPU（模型唯一输入）
     cudaMemcpyAsync(d_obs_buf_, obs_buf_, HISTORY_LENGTH * OBS_DIM * sizeof(float), cudaMemcpyHostToDevice, stream_);
 
     // ========== 执行TensorRT推理 ==========
-    // 模型输入：proprioception [1, 39] + history [1, HISTORY_LENGTH, 39]
+    // 模型输入：obs [1, 390] (term-major 历史缓冲区)
     // 模型输出：actions [1, 10]
     // 根据TensorRT版本选择不同的API
 #if NV_TENSORRT_MAJOR >= 8 && NV_TENSORRT_MINOR >= 5
     // TensorRT 8.5+ 新API
-    context_->setTensorAddress("proprioception", d_input_);
-    context_->setTensorAddress("history", d_obs_buf_);
+    context_->setTensorAddress("obs", d_obs_buf_);
     context_->setTensorAddress("actions", d_output_);
     context_->enqueueV3(stream_);
 #else
     // TensorRT 8.2-8.4 旧API
     // bindings顺序需要与ONNX模型的输入输出顺序一致
-    // [0] proprioception, [1] history, [2] actions
-    void* bindings[] = {d_input_, d_obs_buf_, d_output_};
+    // [0] obs, [1] actions
+    void* bindings[] = {d_obs_buf_, d_output_};
     context_->enqueueV2(bindings, stream_, nullptr);
 #endif
 

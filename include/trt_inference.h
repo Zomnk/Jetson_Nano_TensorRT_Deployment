@@ -169,8 +169,7 @@ private:
      * ============================================================
      */
     cudaStream_t stream_;   ///< CUDA流，用于异步操作
-    void* d_input_;         ///< GPU输入缓冲区 - 当前观测（39个float）
-    void* d_obs_buf_;       ///< GPU输入缓冲区 - 历史观测缓存（HISTORY_LENGTH * 39个float）
+    void* d_obs_buf_;       ///< GPU输入缓冲区 - 历史观测缓存（390维, term-major）
     void* d_output_;        ///< GPU输出缓冲区（10个float）
 
     /*

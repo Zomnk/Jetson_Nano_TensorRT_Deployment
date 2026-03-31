@@ -45,16 +45,8 @@ int main(int argc, char** argv) {
     std::string engine_path = argv[1];
     std::string csv_path = argv[2];
 
-    const int PROP_DIM = 39;
-    const int HISTORY_LEN = 10;
-    const int HISTORY_DIM = HISTORY_LEN * PROP_DIM;
+    const int OBS_DIM = 390;           // 模型输入维度 (term-major 历史缓冲区)
     const int OUTPUT_DIM = 10;
-
-    // Term-major 布局子维度
-    const int ANG_VEL_DIM = 3;
-    const int GRAVITY_DIM = 3;
-    const int CMD_DIM = 3;
-    const int JOINT_DIM = 10;
 
     // ========== 加载TensorRT引擎 ==========
     std::cout << "加载TensorRT引擎..." << std::endl;
@@ -83,11 +75,9 @@ int main(int argc, char** argv) {
     std::cout << "引擎加载成功!" << std::endl;
 
     // ========== 分配GPU内存 ==========
-    void* d_prop;
-    void* d_history;
+    void* d_obs;
     void* d_output;
-    cudaMalloc(&d_prop, PROP_DIM * sizeof(float));
-    cudaMalloc(&d_history, HISTORY_DIM * sizeof(float));
+    cudaMalloc(&d_obs, OBS_DIM * sizeof(float));
     cudaMalloc(&d_output, OUTPUT_DIM * sizeof(float));
 
     cudaStream_t stream;
@@ -126,57 +116,18 @@ int main(int argc, char** argv) {
         auto& row = all_rows[row_idx];
 
         // CSV 格式：step(1) + obs_history(390, term-major) + act(10)
-        // CSV 中的数据已经是 IsaacLab term-major 格式，无需转换！
-        //
-        // term-major 布局：
-        //   [0-29]    base_ang_vel 历史      [10帧 × 3维]
-        //   [30-59]   projected_gravity 历史  [10帧 × 3维]
-        //   [60-89]   velocity_commands 历史  [10帧 × 3维]
-        //   [90-189]  joint_pos 历史          [10帧 × 10维]
-        //   [190-289] joint_vel 历史          [10帧 × 10维]
-        //   [290-389] last_action 历史        [10帧 × 10维]
-
-        // 直接读取历史缓冲区 (390维, term-major)
-        std::vector<float> history(row.begin() + 1, row.begin() + 1 + HISTORY_DIM);
-
-        // 从历史缓冲区各 term 的最后一帧提取当前 proprioception (39维)
-        std::vector<float> prop(PROP_DIM);
-        int last_frame_idx = HISTORY_LEN - 1;  // 第9帧（最新帧）
-        int offset = 0;
-
-        // base_ang_vel 最后一帧: [27-29]
-        for (int d = 0; d < ANG_VEL_DIM; d++)
-            prop[offset++] = history[last_frame_idx * ANG_VEL_DIM + d];
-        // projected_gravity 最后一帧: [57-59]
-        for (int d = 0; d < GRAVITY_DIM; d++)
-            prop[offset++] = history[HISTORY_LEN * ANG_VEL_DIM + last_frame_idx * GRAVITY_DIM + d];
-        // velocity_commands 最后一帧: [87-89]
-        for (int d = 0; d < CMD_DIM; d++)
-            prop[offset++] = history[HISTORY_LEN * (ANG_VEL_DIM + GRAVITY_DIM) + last_frame_idx * CMD_DIM + d];
-        // joint_pos 最后一帧: [180-189]
-        int joint_pos_offset = HISTORY_LEN * (ANG_VEL_DIM + GRAVITY_DIM + CMD_DIM);
-        for (int d = 0; d < JOINT_DIM; d++)
-            prop[offset++] = history[joint_pos_offset + last_frame_idx * JOINT_DIM + d];
-        // joint_vel 最后一帧: [280-289]
-        int joint_vel_offset = joint_pos_offset + HISTORY_LEN * JOINT_DIM;
-        for (int d = 0; d < JOINT_DIM; d++)
-            prop[offset++] = history[joint_vel_offset + last_frame_idx * JOINT_DIM + d];
-        // last_action 最后一帧: [380-389]
-        int action_offset = joint_vel_offset + HISTORY_LEN * JOINT_DIM;
-        for (int d = 0; d < JOINT_DIM; d++)
-            prop[offset++] = history[action_offset + last_frame_idx * JOINT_DIM + d];
+        // CSV 中的数据已经是 IsaacLab term-major 格式，直接作为模型输入
+        std::vector<float> obs(row.begin() + 1, row.begin() + 1 + OBS_DIM);
 
         // 提取仿真中的真实 action (最后10维)
         std::vector<float> gt_action(row.end() - OUTPUT_DIM, row.end());
 
         // 拷贝到GPU
-        cudaMemcpyAsync(d_prop, prop.data(), PROP_DIM * sizeof(float),
-                        cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_history, history.data(), HISTORY_DIM * sizeof(float),
+        cudaMemcpyAsync(d_obs, obs.data(), OBS_DIM * sizeof(float),
                         cudaMemcpyHostToDevice, stream);
 
-        // 执行推理
-        void* bindings[] = {d_prop, d_history, d_output};
+        // 执行推理（模型只有一个输入 obs）
+        void* bindings[] = {d_obs, d_output};
         context->enqueueV2(bindings, stream, nullptr);
 
         // 获取输出
@@ -237,8 +188,7 @@ int main(int argc, char** argv) {
     std::cout << "平均最大相对误差: " << std::fixed << std::setprecision(6) << (total_max_rel_error / error_count) << std::endl;
 
     // ========== 清理资源 ==========
-    cudaFree(d_prop);
-    cudaFree(d_history);
+    cudaFree(d_obs);
     cudaFree(d_output);
     cudaStreamDestroy(stream);
 
