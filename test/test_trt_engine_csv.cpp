@@ -125,65 +125,46 @@ int main(int argc, char** argv) {
     for (int row_idx = 0; row_idx < row_count; row_idx++) {
         auto& row = all_rows[row_idx];
 
-        // 新 CSV 格式：step(1) + obs(390) + act(10)
-        // 跳过第一列 step，从第二列开始是观测数据
+        // CSV 格式：step(1) + obs_history(390, term-major) + act(10)
+        // CSV 中的数据已经是 IsaacLab term-major 格式，无需转换！
+        //
+        // term-major 布局：
+        //   [0-29]    base_ang_vel 历史      [10帧 × 3维]
+        //   [30-59]   projected_gravity 历史  [10帧 × 3维]
+        //   [60-89]   velocity_commands 历史  [10帧 × 3维]
+        //   [90-189]  joint_pos 历史          [10帧 × 10维]
+        //   [190-289] joint_vel 历史          [10帧 × 10维]
+        //   [290-389] last_action 历史        [10帧 × 10维]
 
-        // 提取当前观测 (前39维，从列1开始)
-        std::vector<float> prop(row.begin() + 1, row.begin() + 1 + PROP_DIM);
+        // 直接读取历史缓冲区 (390维, term-major)
+        std::vector<float> history(row.begin() + 1, row.begin() + 1 + HISTORY_DIM);
 
-        // 提取历史观测 (390维)
-        // CSV 中的 390 维是 frame-major 格式（每帧39维连续存储10帧）
-        // 需要转换为 IsaacLab term-major 格式（每个term的10帧连在一起）
-        std::vector<float> frame_major_history(row.begin() + 1 + PROP_DIM, row.begin() + 1 + PROP_DIM + HISTORY_DIM);
-
-        // 转换为 term-major 布局
-        std::vector<float> history(HISTORY_DIM, 0.0f);
+        // 从历史缓冲区各 term 的最后一帧提取当前 proprioception (39维)
+        std::vector<float> prop(PROP_DIM);
+        int last_frame_idx = HISTORY_LEN - 1;  // 第9帧（最新帧）
         int offset = 0;
 
-        // [0-29] base_ang_vel 历史 (10帧 × 3维)
-        for (int h = 0; h < HISTORY_LEN; h++) {
-            for (int d = 0; d < ANG_VEL_DIM; d++) {
-                history[offset++] = frame_major_history[h * PROP_DIM + d];
-            }
-        }
-
-        // [30-59] projected_gravity 历史 (10帧 × 3维)
-        for (int h = 0; h < HISTORY_LEN; h++) {
-            for (int d = 0; d < GRAVITY_DIM; d++) {
-                history[offset++] = frame_major_history[h * PROP_DIM + ANG_VEL_DIM + d];
-            }
-        }
-
-        // [60-89] velocity_commands 历史 (10帧 × 3维)
-        for (int h = 0; h < HISTORY_LEN; h++) {
-            for (int d = 0; d < CMD_DIM; d++) {
-                history[offset++] = frame_major_history[h * PROP_DIM + ANG_VEL_DIM + GRAVITY_DIM + d];
-            }
-        }
-
-        // [90-189] joint_pos 历史 (10帧 × 10维)
-        int joint_pos_start = ANG_VEL_DIM + GRAVITY_DIM + CMD_DIM;  // 9
-        for (int h = 0; h < HISTORY_LEN; h++) {
-            for (int d = 0; d < JOINT_DIM; d++) {
-                history[offset++] = frame_major_history[h * PROP_DIM + joint_pos_start + d];
-            }
-        }
-
-        // [190-289] joint_vel 历史 (10帧 × 10维)
-        int joint_vel_start = joint_pos_start + JOINT_DIM;  // 19
-        for (int h = 0; h < HISTORY_LEN; h++) {
-            for (int d = 0; d < JOINT_DIM; d++) {
-                history[offset++] = frame_major_history[h * PROP_DIM + joint_vel_start + d];
-            }
-        }
-
-        // [290-389] last_action 历史 (10帧 × 10维)
-        int action_start = joint_vel_start + JOINT_DIM;  // 29
-        for (int h = 0; h < HISTORY_LEN; h++) {
-            for (int d = 0; d < JOINT_DIM; d++) {
-                history[offset++] = frame_major_history[h * PROP_DIM + action_start + d];
-            }
-        }
+        // base_ang_vel 最后一帧: [27-29]
+        for (int d = 0; d < ANG_VEL_DIM; d++)
+            prop[offset++] = history[last_frame_idx * ANG_VEL_DIM + d];
+        // projected_gravity 最后一帧: [57-59]
+        for (int d = 0; d < GRAVITY_DIM; d++)
+            prop[offset++] = history[HISTORY_LEN * ANG_VEL_DIM + last_frame_idx * GRAVITY_DIM + d];
+        // velocity_commands 最后一帧: [87-89]
+        for (int d = 0; d < CMD_DIM; d++)
+            prop[offset++] = history[HISTORY_LEN * (ANG_VEL_DIM + GRAVITY_DIM) + last_frame_idx * CMD_DIM + d];
+        // joint_pos 最后一帧: [180-189]
+        int joint_pos_offset = HISTORY_LEN * (ANG_VEL_DIM + GRAVITY_DIM + CMD_DIM);
+        for (int d = 0; d < JOINT_DIM; d++)
+            prop[offset++] = history[joint_pos_offset + last_frame_idx * JOINT_DIM + d];
+        // joint_vel 最后一帧: [280-289]
+        int joint_vel_offset = joint_pos_offset + HISTORY_LEN * JOINT_DIM;
+        for (int d = 0; d < JOINT_DIM; d++)
+            prop[offset++] = history[joint_vel_offset + last_frame_idx * JOINT_DIM + d];
+        // last_action 最后一帧: [380-389]
+        int action_offset = joint_vel_offset + HISTORY_LEN * JOINT_DIM;
+        for (int d = 0; d < JOINT_DIM; d++)
+            prop[offset++] = history[action_offset + last_frame_idx * JOINT_DIM + d];
 
         // 提取仿真中的真实 action (最后10维)
         std::vector<float> gt_action(row.end() - OUTPUT_DIM, row.end());
