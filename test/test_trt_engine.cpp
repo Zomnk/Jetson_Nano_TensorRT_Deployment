@@ -150,23 +150,32 @@ int main(int argc, char** argv) {
     const int HISTORY_DIM = HISTORY_LEN * PROP_DIM;  // history 总维度 = 10 * 39 = 390
     const int OUTPUT_DIM = 10;         // 动作维度
 
+    // Term-major 布局子维度
+    const int ANG_VEL_DIM = 3;
+    const int GRAVITY_DIM = 3;
+    const int CMD_DIM = 3;
+    const int JOINT_DIM = 10;
+
     std::cout << "\n创建测试输入..." << std::endl;
     std::cout << "  proprioception: [1, " << PROP_DIM << "]" << std::endl;
-    std::cout << "  history: [1, " << HISTORY_LEN << ", " << PROP_DIM << "]" << std::endl;
+    std::cout << "  history: [1, " << HISTORY_DIM << "] (IsaacLab term-major 布局)" << std::endl;
 
     std::vector<float> input_prop(PROP_DIM);
-    std::vector<float> input_history(HISTORY_DIM);
+    std::vector<float> input_history(HISTORY_DIM, 0.0f);
 
     // 将所有观测量设置为 0
     for (int i = 0; i < PROP_DIM; i++) {
         input_prop[i] = 0.0f;
     }
 
-    // 用相同的 proprioception 数据填充整个 history（模拟连续的观测）
-    for (int h = 0; h < HISTORY_LEN; h++) {
-        std::copy(input_prop.begin(), input_prop.end(),
-                  input_history.begin() + h * PROP_DIM);
-    }
+    // IsaacLab term-major 布局：每个 term 的 10 帧历史连在一起
+    // [0-29]    base_ang_vel 历史 (10帧 × 3维)
+    // [30-59]   projected_gravity 历史 (10帧 × 3维)
+    // [60-89]   velocity_commands 历史 (10帧 × 3维)
+    // [90-189]  joint_pos 历史 (10帧 × 10维)
+    // [190-289] joint_vel 历史 (10帧 × 10维)
+    // [290-389] last_action 历史 (10帧 × 10维)
+    // 由于输入全为 0，这里直接填充全 0 即可
 
     // 打印完整的 proprioception（39维）
     std::cout << "proprioception (39维): ";

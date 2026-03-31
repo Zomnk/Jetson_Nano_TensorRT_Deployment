@@ -188,11 +188,24 @@ private:
 
     /*
      * ============================================================
-     * 历史观测缓存（与LibTorch版本保持一致）
+     * 历史观测缓存（IsaacLab term-major 布局）
      * ============================================================
      */
     static constexpr int HISTORY_LENGTH = 10;  ///< 历史缓存长度（帧数）
-    float obs_buf_[HISTORY_LENGTH * OBS_DIM];  ///< 历史观测缓存 [HISTORY_LENGTH, OBS_DIM]
+    static constexpr int ANG_VEL_DIM = 3;      ///< base_ang_vel 维度
+    static constexpr int GRAVITY_DIM = 3;      ///< projected_gravity 维度
+    static constexpr int CMD_DIM = 3;          ///< velocity_commands 维度
+    static constexpr int JOINT_DIM = 10;       ///< joint_pos/joint_vel/action 维度
+
+    ///< 各 term 的独立历史缓冲区（每个都是滑动窗口，最新帧在末尾）
+    float hist_ang_vel_[HISTORY_LENGTH * ANG_VEL_DIM];   ///< [0-29]   base_ang_vel 历史
+    float hist_gravity_[HISTORY_LENGTH * GRAVITY_DIM];   ///< [30-59]  projected_gravity 历史
+    float hist_cmd_[HISTORY_LENGTH * CMD_DIM];           ///< [60-89]  velocity_commands 历史
+    float hist_joint_pos_[HISTORY_LENGTH * JOINT_DIM];   ///< [90-189] joint_pos 历史
+    float hist_joint_vel_[HISTORY_LENGTH * JOINT_DIM];   ///< [190-289] joint_vel 历史
+    float hist_action_[HISTORY_LENGTH * JOINT_DIM];      ///< [290-389] last_action 历史
+
+    float obs_buf_[HISTORY_LENGTH * OBS_DIM];  ///< 拼接后的 term-major 历史缓存（传给GPU）
 
     /*
      * ============================================================

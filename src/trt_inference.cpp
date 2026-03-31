@@ -55,7 +55,14 @@ TRTInference::TRTInference()
     std::fill(last_action_, last_action_ + ACTION_DIM, 0.0f);
     // 初始化临时动作缓存为全零
     std::fill(action_temp_, action_temp_ + ACTION_DIM, 0.0f);
-    // 初始化历史观测缓存为全零
+    // 初始化所有 term 独立历史缓冲区为全零（IsaacLab term-major）
+    std::fill(hist_ang_vel_, hist_ang_vel_ + HISTORY_LENGTH * ANG_VEL_DIM, 0.0f);
+    std::fill(hist_gravity_, hist_gravity_ + HISTORY_LENGTH * GRAVITY_DIM, 0.0f);
+    std::fill(hist_cmd_, hist_cmd_ + HISTORY_LENGTH * CMD_DIM, 0.0f);
+    std::fill(hist_joint_pos_, hist_joint_pos_ + HISTORY_LENGTH * JOINT_DIM, 0.0f);
+    std::fill(hist_joint_vel_, hist_joint_vel_ + HISTORY_LENGTH * JOINT_DIM, 0.0f);
+    std::fill(hist_action_, hist_action_ + HISTORY_LENGTH * JOINT_DIM, 0.0f);
+    // 初始化拼接后的历史观测缓存为全零
     std::fill(obs_buf_, obs_buf_ + HISTORY_LENGTH * OBS_DIM, 0.0f);
     // 初始化最后一次观测为全零
     std::fill(last_obs_, last_obs_ + OBS_DIM, 0.0f);
@@ -198,7 +205,14 @@ void TRTInference::reset() {
     std::fill(last_action_, last_action_ + ACTION_DIM, 0.0f);
     std::fill(action_temp_, action_temp_ + ACTION_DIM, 0.0f);
     cmd_x_ = cmd_y_ = cmd_rate_ = 0.0f;
-    // 重置历史观测缓存
+    // 重置所有 term 独立历史缓冲区
+    std::fill(hist_ang_vel_, hist_ang_vel_ + HISTORY_LENGTH * ANG_VEL_DIM, 0.0f);
+    std::fill(hist_gravity_, hist_gravity_ + HISTORY_LENGTH * GRAVITY_DIM, 0.0f);
+    std::fill(hist_cmd_, hist_cmd_ + HISTORY_LENGTH * CMD_DIM, 0.0f);
+    std::fill(hist_joint_pos_, hist_joint_pos_ + HISTORY_LENGTH * JOINT_DIM, 0.0f);
+    std::fill(hist_joint_vel_, hist_joint_vel_ + HISTORY_LENGTH * JOINT_DIM, 0.0f);
+    std::fill(hist_action_, hist_action_ + HISTORY_LENGTH * JOINT_DIM, 0.0f);
+    // 重置拼接后的 obs_buf_
     std::fill(obs_buf_, obs_buf_ + HISTORY_LENGTH * OBS_DIM, 0.0f);
     if (d_obs_buf_) {
         cudaMemset(d_obs_buf_, 0, HISTORY_LENGTH * OBS_DIM * sizeof(float));
@@ -239,6 +253,90 @@ void TRTInference::computeProjectedGravity(const float eu_ang[3], float gravity_
     gravity_proj[0] = sin_pitch;
     gravity_proj[1] = -sin_roll * cos_pitch;
     gravity_proj[2] = -cos_roll * cos_pitch;
+}
+
+/**
+ * @brief 按 IsaacLab 的 term-major 方式更新历史缓存
+ *
+ * @details 对每个 term 分别维护滑动窗口，然后按 term-major 拼接：
+ *          [0-29]    base_ang_vel 的 10 帧历史（每帧 3 维）
+ *          [30-59]   projected_gravity 的 10 帧历史（每帧 3 维）
+ *          [60-89]   velocity_commands 的 10 帧历史（每帧 3 维）
+ *          [90-189]  joint_pos 的 10 帧历史（每帧 10 维）
+ *          [190-289] joint_vel 的 10 帧历史（每帧 10 维）
+ *          [290-389] last_action 的 10 帧历史（每帧 10 维）
+ *
+ * @param obs 当前帧观测（39维），按 frame-major 排列：
+ *            [0-2]   base_ang_vel
+ *            [3-5]   projected_gravity
+ *            [6-8]   velocity_commands
+ *            [9-18]  joint_pos
+ *            [19-28] joint_vel
+ *            [29-38] last_action
+ */
+void TRTInference::updateHistoryBuffer(const float* obs) {
+    // ========== 滑动窗口：每个 term 独立移位 ==========
+    // base_ang_vel: shift [3..29], append obs[0-2]
+    for (int i = 0; i < (HISTORY_LENGTH - 1) * ANG_VEL_DIM; ++i)
+        hist_ang_vel_[i] = hist_ang_vel_[i + ANG_VEL_DIM];
+    for (int i = 0; i < ANG_VEL_DIM; ++i)
+        hist_ang_vel_[(HISTORY_LENGTH - 1) * ANG_VEL_DIM + i] = obs[i];
+
+    // projected_gravity: shift [3..29], append obs[3-5]
+    for (int i = 0; i < (HISTORY_LENGTH - 1) * GRAVITY_DIM; ++i)
+        hist_gravity_[i] = hist_gravity_[i + GRAVITY_DIM];
+    for (int i = 0; i < GRAVITY_DIM; ++i)
+        hist_gravity_[(HISTORY_LENGTH - 1) * GRAVITY_DIM + i] = obs[3 + i];
+
+    // velocity_commands: shift [3..29], append obs[6-8]
+    for (int i = 0; i < (HISTORY_LENGTH - 1) * CMD_DIM; ++i)
+        hist_cmd_[i] = hist_cmd_[i + CMD_DIM];
+    for (int i = 0; i < CMD_DIM; ++i)
+        hist_cmd_[(HISTORY_LENGTH - 1) * CMD_DIM + i] = obs[6 + i];
+
+    // joint_pos: shift [10..99], append obs[9-18]
+    for (int i = 0; i < (HISTORY_LENGTH - 1) * JOINT_DIM; ++i)
+        hist_joint_pos_[i] = hist_joint_pos_[i + JOINT_DIM];
+    for (int i = 0; i < JOINT_DIM; ++i)
+        hist_joint_pos_[(HISTORY_LENGTH - 1) * JOINT_DIM + i] = obs[9 + i];
+
+    // joint_vel: shift [10..99], append obs[19-28]
+    for (int i = 0; i < (HISTORY_LENGTH - 1) * JOINT_DIM; ++i)
+        hist_joint_vel_[i] = hist_joint_vel_[i + JOINT_DIM];
+    for (int i = 0; i < JOINT_DIM; ++i)
+        hist_joint_vel_[(HISTORY_LENGTH - 1) * JOINT_DIM + i] = obs[19 + i];
+
+    // last_action: shift [10..99], append obs[29-38]
+    for (int i = 0; i < (HISTORY_LENGTH - 1) * JOINT_DIM; ++i)
+        hist_action_[i] = hist_action_[i + JOINT_DIM];
+    for (int i = 0; i < JOINT_DIM; ++i)
+        hist_action_[(HISTORY_LENGTH - 1) * JOINT_DIM + i] = obs[29 + i];
+
+    // ========== 按 term-major 拼接成 390 维 obs_buf_ ==========
+    int offset = 0;
+
+    // [0-29] base_ang_vel 历史
+    std::memcpy(obs_buf_ + offset, hist_ang_vel_, HISTORY_LENGTH * ANG_VEL_DIM * sizeof(float));
+    offset += HISTORY_LENGTH * ANG_VEL_DIM;
+
+    // [30-59] projected_gravity 历史
+    std::memcpy(obs_buf_ + offset, hist_gravity_, HISTORY_LENGTH * GRAVITY_DIM * sizeof(float));
+    offset += HISTORY_LENGTH * GRAVITY_DIM;
+
+    // [60-89] velocity_commands 历史
+    std::memcpy(obs_buf_ + offset, hist_cmd_, HISTORY_LENGTH * CMD_DIM * sizeof(float));
+    offset += HISTORY_LENGTH * CMD_DIM;
+
+    // [90-189] joint_pos 历史
+    std::memcpy(obs_buf_ + offset, hist_joint_pos_, HISTORY_LENGTH * JOINT_DIM * sizeof(float));
+    offset += HISTORY_LENGTH * JOINT_DIM;
+
+    // [190-289] joint_vel 历史
+    std::memcpy(obs_buf_ + offset, hist_joint_vel_, HISTORY_LENGTH * JOINT_DIM * sizeof(float));
+    offset += HISTORY_LENGTH * JOINT_DIM;
+
+    // [290-389] last_action 历史
+    std::memcpy(obs_buf_ + offset, hist_action_, HISTORY_LENGTH * JOINT_DIM * sizeof(float));
 }
 
 /**
@@ -372,17 +470,8 @@ bool TRTInference::infer(const MsgRequest& request, float* action_out) {
     // 等待所有CUDA操作完成
     cudaStreamSynchronize(stream_);
 
-    // ========== 更新历史观测缓存（滑动窗口） ==========
-    // 移除最旧的观测，添加最新的观测
-    // obs_buf_布局: [obs_0, obs_1, ..., obs_{HISTORY_LENGTH-1}]
-    // 更新后: [obs_1, obs_2, ..., obs_{HISTORY_LENGTH-1}, obs_new]
-    for (int i = 0; i < (HISTORY_LENGTH - 1) * OBS_DIM; ++i) {
-        obs_buf_[i] = obs_buf_[i + OBS_DIM];
-    }
-    // 将当前观测添加到缓存末尾
-    for (int i = 0; i < OBS_DIM; ++i) {
-        obs_buf_[(HISTORY_LENGTH - 1) * OBS_DIM + i] = obs[i];
-    }
+    // ========== 更新历史观测缓存（term-major 滑动窗口） ==========
+    updateHistoryBuffer(obs);
 
     // ========== 动作后处理 ==========
     // 改为直接使用网络输出，不进行滤波和限幅，适配 IsaacLab

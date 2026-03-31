@@ -50,6 +50,12 @@ int main(int argc, char** argv) {
     const int HISTORY_DIM = HISTORY_LEN * PROP_DIM;
     const int OUTPUT_DIM = 10;
 
+    // Term-major 布局子维度
+    const int ANG_VEL_DIM = 3;
+    const int GRAVITY_DIM = 3;
+    const int CMD_DIM = 3;
+    const int JOINT_DIM = 10;
+
     // ========== 加载TensorRT引擎 ==========
     std::cout << "加载TensorRT引擎..." << std::endl;
     std::ifstream engine_file(engine_path, std::ios::binary);
@@ -125,30 +131,65 @@ int main(int argc, char** argv) {
         // 提取当前观测 (前39维，从列1开始)
         std::vector<float> prop(row.begin() + 1, row.begin() + 1 + PROP_DIM);
 
-        // 提取历史观测缓存 (390维，从列40开始)
-        // 注意：新 CSV 中的结构是 step(1) + obs(390) + act(10)
-        // 其中 obs(390) = 当前观测(39) + 历史观测缓存(351)
-        // 但实际上 obs(390) 已经包含了完整的 10 帧历史
-        // 所以我们需要从列1开始取390维作为完整的观测输入
-        std::vector<float> full_obs(row.begin() + 1, row.begin() + 1 + 390);
+        // 提取历史观测 (390维)
+        // CSV 中的 390 维是 frame-major 格式（每帧39维连续存储10帧）
+        // 需要转换为 IsaacLab term-major 格式（每个term的10帧连在一起）
+        std::vector<float> frame_major_history(row.begin() + 1 + PROP_DIM, row.begin() + 1 + PROP_DIM + HISTORY_DIM);
 
-        // 当前观测 (前39维)
-        std::vector<float> prop_current(full_obs.begin(), full_obs.begin() + PROP_DIM);
+        // 转换为 term-major 布局
+        std::vector<float> history(HISTORY_DIM, 0.0f);
+        int offset = 0;
 
-        // 历史观测缓存 (后351维，需要补充到390维)
-        // 实际上 obs(390) 中包含了 10 帧的历史，每帧 39 维
-        // 所以直接使用 full_obs 的后 351 维作为历史缓存的一部分
-        std::vector<float> history(full_obs.begin() + PROP_DIM, full_obs.end());
-        // 如果历史缓存不足 390 维，用零填充
-        while (history.size() < HISTORY_DIM) {
-            history.push_back(0.0f);
+        // [0-29] base_ang_vel 历史 (10帧 × 3维)
+        for (int h = 0; h < HISTORY_LEN; h++) {
+            for (int d = 0; d < ANG_VEL_DIM; d++) {
+                history[offset++] = frame_major_history[h * PROP_DIM + d];
+            }
+        }
+
+        // [30-59] projected_gravity 历史 (10帧 × 3维)
+        for (int h = 0; h < HISTORY_LEN; h++) {
+            for (int d = 0; d < GRAVITY_DIM; d++) {
+                history[offset++] = frame_major_history[h * PROP_DIM + ANG_VEL_DIM + d];
+            }
+        }
+
+        // [60-89] velocity_commands 历史 (10帧 × 3维)
+        for (int h = 0; h < HISTORY_LEN; h++) {
+            for (int d = 0; d < CMD_DIM; d++) {
+                history[offset++] = frame_major_history[h * PROP_DIM + ANG_VEL_DIM + GRAVITY_DIM + d];
+            }
+        }
+
+        // [90-189] joint_pos 历史 (10帧 × 10维)
+        int joint_pos_start = ANG_VEL_DIM + GRAVITY_DIM + CMD_DIM;  // 9
+        for (int h = 0; h < HISTORY_LEN; h++) {
+            for (int d = 0; d < JOINT_DIM; d++) {
+                history[offset++] = frame_major_history[h * PROP_DIM + joint_pos_start + d];
+            }
+        }
+
+        // [190-289] joint_vel 历史 (10帧 × 10维)
+        int joint_vel_start = joint_pos_start + JOINT_DIM;  // 19
+        for (int h = 0; h < HISTORY_LEN; h++) {
+            for (int d = 0; d < JOINT_DIM; d++) {
+                history[offset++] = frame_major_history[h * PROP_DIM + joint_vel_start + d];
+            }
+        }
+
+        // [290-389] last_action 历史 (10帧 × 10维)
+        int action_start = joint_vel_start + JOINT_DIM;  // 29
+        for (int h = 0; h < HISTORY_LEN; h++) {
+            for (int d = 0; d < JOINT_DIM; d++) {
+                history[offset++] = frame_major_history[h * PROP_DIM + action_start + d];
+            }
         }
 
         // 提取仿真中的真实 action (最后10维)
         std::vector<float> gt_action(row.end() - OUTPUT_DIM, row.end());
 
         // 拷贝到GPU
-        cudaMemcpyAsync(d_prop, prop_current.data(), PROP_DIM * sizeof(float),
+        cudaMemcpyAsync(d_prop, prop.data(), PROP_DIM * sizeof(float),
                         cudaMemcpyHostToDevice, stream);
         cudaMemcpyAsync(d_history, history.data(), HISTORY_DIM * sizeof(float),
                         cudaMemcpyHostToDevice, stream);
