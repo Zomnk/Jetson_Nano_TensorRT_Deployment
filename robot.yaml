@@ -34,15 +34,15 @@ robot_config:
     left_leg:
       yaw:   0.000000  # rad
       roll:  0.000000  # rad
-      pitch: 0.180000  # rad
-      knee:  1.110000  # rad
-      ankle: 0.920000  # rad
+      pitch: 0.000000  # rad
+      knee:  0.000000  # rad
+      ankle: 0.000000  # rad
     right_leg:
       yaw:   0.000000  # rad
       roll:  0.000000  # rad
-      pitch: -0.180000  # rad
-      knee:  -1.110000  # rad
-      ankle: -0.920000  # rad
+      pitch: 0.000000  # rad
+      knee:  0.000000  # rad
+      ankle: 0.000000  # rad
 
   # ========================================
   # 关节方向映射 (sign_array)
