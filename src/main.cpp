@@ -385,7 +385,6 @@ int main(int argc, char** argv) {
 
     int loop_count = 0;   // 循环计数
     int infer_count = 0;  // 推理计数
-    float last_action[ACTION_DIM] = {0};  // 上一步的action，用于滤波
 
     // 记录程序启动时间
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -397,7 +396,6 @@ int main(int argc, char** argv) {
         if (gamepad.consumeLTPressedEdge()) {
             std::cout << "\n[手柄] LT按下，恢复到初始姿态" << std::endl;
             inference.reset();
-            std::fill(last_action, last_action + ACTION_DIM, 0.0f);
             std::memset(&response, 0, sizeof(response));
             for (int i = 0; i < ACTION_DIM; ++i) {
                 response.q_exp[i] = init_pose_real[i];
@@ -440,21 +438,11 @@ int main(int argc, char** argv) {
 
             // ========== 推理失败、trigger!=1.0或输出有NaN时的处理 ==========
             if (infer_success && !has_nan) {
-                // 推理成功且无NaN，使用推理结果
-                // 注意：action 已经在 infer() 中完成了 Sim→Real 映射
+                // 推理成功且无NaN，直接使用推理结果（与IsaacLab训练一致，无滤波无限幅）
+                // action 已经在 infer() 中完成了 Sim→Real 映射
                 // 映射公式：q_real = (action * 0.25 + default_angles) * sign_array + offset
-                // 其中 offset = q_encoder_stand - default_angles
-                // 这里直接使用，不再需要额外的转换
                 for (int i = 0; i < ACTION_DIM; ++i) {
-                    // 应用滤波: 0.8*current_action + 0.2*last_action
-                    float filtered = 0.8f * action[i] + 0.2f * last_action[i];
-
-                    // 限制范围
-                    if (filtered < -5.0f) filtered = -5.0f;
-                    if (filtered > 5.0f) filtered = 5.0f;
-
-                    response.q_exp[i] = filtered;
-                    last_action[i] = action[i];  // 保存原始action用于下一次滤波
+                    response.q_exp[i] = action[i];
                 }
                 infer_count++;
 
