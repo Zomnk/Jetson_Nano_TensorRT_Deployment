@@ -39,9 +39,10 @@ void computeProjectedGravityFromEuler(const float eu_ang[3], float gravity_proj[
 // 从四元数计算投影重力向量（与 trt_inference.cpp 一致）
 void computeProjectedGravityFromQuat(const float quat[4], float gravity_proj[3]) {
     float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
-    gravity_proj[0] = 2.0f * (x * z - w * y);
-    gravity_proj[1] = 2.0f * (y * z + w * x);
-    gravity_proj[2] = 1.0f - 2.0f * (x * x + y * y);
+    // Waveshare IMU 四元数表示机体→世界旋转，需要取反得到世界→机体的重力投影
+    gravity_proj[0] = -2.0f * (x * z - w * y);
+    gravity_proj[1] = -2.0f * (y * z + w * x);
+    gravity_proj[2] = -(1.0f - 2.0f * (x * x + y * y));
 }
 
 int main(int argc, char** argv) {
