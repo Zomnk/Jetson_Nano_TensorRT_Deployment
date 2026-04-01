@@ -371,9 +371,9 @@ void TRTInference::buildObservation(const MsgRequest& request, float* obs) {
     obs[idx++] = request.omega[1] * OMEGA_SCALE;
     obs[idx++] = request.omega[2] * OMEGA_SCALE;
 
-    // [3-5] 投影重力向量（从Waveshare IMU四元数计算）
+    // [3-5] 投影重力向量（从Waveshare IMU欧拉角计算）
     float gravity_proj[3];
-    computeProjectedGravityFromQuat(request.quat, gravity_proj);
+    computeProjectedGravity(request.eu_ang, gravity_proj);
     obs[idx++] = gravity_proj[0];
     obs[idx++] = gravity_proj[1];
     obs[idx++] = gravity_proj[2];
