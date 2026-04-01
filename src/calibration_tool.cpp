@@ -1,15 +1,14 @@
 /**
  * @file calibration_tool.cpp
- * @brief 双足机器人 Sim-to-Real 标定工具（重构版）
- * @author Claude Code
+ * @brief 双足机器人 Sim-to-Real 标定工具
+ * @author Zomnk
  * @date 2026-03-25
  *
  * @note 功能说明：
- *       1. 输入算法层基准姿态（default_angles）
- *       2. 手动摆放机器人到期望站立姿态
- *       3. 读取编码器值作为硬件零点偏置（offset）
- *       4. 配置关节方向映射（sign_array）
- *       5. 保存完整的 robot.yaml 配置文件
+ *       1. 默认写入算法层基准姿态（default_angles）
+ *       2. 通过UDP驱动机器人平滑移动到站立姿态
+ *       3. 到达后读取编码器值，计算硬件零点偏置（offset）
+ *       4. 保存完整的 robot.yaml 配置文件
  *
  * @note 使用方法：
  *       ./calibration_tool [--ip IP] [--port PORT]
@@ -27,6 +26,7 @@
 #include <ctime>
 #include <string>
 #include <sstream>
+#include <fcntl.h>
 #include "types.h"
 
 using namespace std;
@@ -37,21 +37,23 @@ using namespace std;
  * ============================================================
  */
 const char* JOINT_NAMES[10] = {
-    "左腿Yaw",
-    "左腿Roll",
-    "左腿Pitch",
-    "左腿Knee",
-    "左腿Ankle",
-    "右腿Yaw",
-    "右腿Roll",
-    "右腿Pitch",
-    "右腿Knee",
-    "右腿Ankle"
+    "左腿Yaw", "左腿Roll", "左腿Pitch", "左腿Knee", "左腿Ankle",
+    "右腿Yaw", "右腿Roll", "右腿Pitch", "右腿Knee", "右腿Ankle"
 };
 
 const char* YAML_KEYS[10] = {
     "yaw", "roll", "pitch", "knee", "ankle",
     "yaw", "roll", "pitch", "knee", "ankle"
+};
+
+/*
+ * ============================================================
+ * 默认算法层基准姿态（训练时使用的站立姿态）
+ * ============================================================
+ */
+const float DEFAULT_ANGLES[10] = {
+    0.0f, 0.0f, 0.18f, 1.11f, 0.92f,   // 左腿
+    0.0f, 0.0f, 0.18f, 1.11f, 0.92f    // 右腿
 };
 
 /*
@@ -67,7 +69,7 @@ void signal_handler(int sig) {
 }
 
 /**
- * @brief 保存完整的 robot.yaml 配置文件
+ * @brief 保存 robot.yaml 配置文件
  */
 bool save_yaml(const float default_angles[10],
                const float offset[10],
@@ -79,7 +81,6 @@ bool save_yaml(const float default_angles[10],
         return false;
     }
 
-    // 获取当前时间
     time_t now = time(nullptr);
     char time_str[100];
     strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
@@ -90,12 +91,9 @@ bool save_yaml(const float default_angles[10],
     f << endl;
     f << "robot_config:" << endl;
 
-    // ========== default_angles ==========
     f << "  # ========================================" << endl;
     f << "  # 算法层基准姿态 (default_angles)" << endl;
     f << "  # ========================================" << endl;
-    f << "  # 说明：这是训练环境中使用的基准姿态，通常来自训练时的 default_joint_angles" << endl;
-    f << "  # 注意：这个值应该与训练环境保持一致，不是实机标定时读到的编码器值" << endl;
     f << "  default_angles:" << endl;
     f << "    left_leg:" << endl;
     for (int i = 0; i < 5; i++) {
@@ -109,12 +107,9 @@ bool save_yaml(const float default_angles[10],
     }
     f << endl;
 
-    // ========== offset ==========
     f << "  # ========================================" << endl;
     f << "  # 硬件零点偏置 (offset)" << endl;
     f << "  # ========================================" << endl;
-    f << "  # 说明：每台机器独立标定的编码器零点偏置" << endl;
-    f << "  # 这是让机器人站到期望姿态时，实际读取到的编码器值" << endl;
     f << "  offset:" << endl;
     f << "    left_leg:" << endl;
     for (int i = 0; i < 5; i++) {
@@ -128,13 +123,9 @@ bool save_yaml(const float default_angles[10],
     }
     f << endl;
 
-    // ========== sign_array ==========
     f << "  # ========================================" << endl;
     f << "  # 关节方向映射 (sign_array)" << endl;
     f << "  # ========================================" << endl;
-    f << "  # 说明：定义每个关节的旋转方向" << endl;
-    f << "  # 1 = 与训练环境方向一致" << endl;
-    f << "  # -1 = 与训练环境方向相反" << endl;
     f << "  sign_array:" << endl;
     f << "    left_leg:" << endl;
     for (int i = 0; i < 5; i++) {
@@ -148,52 +139,15 @@ bool save_yaml(const float default_angles[10],
     }
     f << endl;
 
-    // ========== 使用说明 ==========
     f << "# ========================================" << endl;
-    f << "# 使用说明" << endl;
-    f << "# ========================================" << endl;
-    f << "# 1. default_angles: 从训练环境获取，保持与训练时一致" << endl;
-    f << "# 2. offset: 通过 calibration_tool 标定获得" << endl;
-    f << "# 3. sign_array: 根据实际硬件装配确定，需要逐关节测试验证" << endl;
-    f << "#" << endl;
     f << "# 坐标变换关系：" << endl;
     f << "# - 观测链路 (Real → Sim):" << endl;
     f << "#   q_sim = (q_real - offset) * sign_array" << endl;
     f << "#   dq_sim = dq_real * sign_array" << endl;
-    f << "#" << endl;
     f << "# - 控制链路 (Sim → Real):" << endl;
     f << "#   q_real = q_sim * sign_array + offset" << endl;
 
     f.close();
-    return true;
-}
-
-/**
- * @brief 从用户输入读取浮点数数组
- */
-bool read_float_array(const string& prompt, float arr[10], float default_val = 0.0f) {
-    cout << prompt << endl;
-    cout << "输入格式: 10个浮点数，用空格分隔" << endl;
-    cout << "或直接按 Enter 使用默认值 [" << default_val << " × 10]: ";
-
-    string line;
-    getline(cin, line);
-
-    if (line.empty()) {
-        for (int i = 0; i < 10; i++) {
-            arr[i] = default_val;
-        }
-        return true;
-    }
-
-    istringstream iss(line);
-    for (int i = 0; i < 10; i++) {
-        if (!(iss >> arr[i])) {
-            cerr << "输入格式错误，需要10个数值" << endl;
-            return false;
-        }
-    }
-
     return true;
 }
 
@@ -209,9 +163,7 @@ bool read_int_array(const string& prompt, int arr[10], int default_val = 1) {
     getline(cin, line);
 
     if (line.empty()) {
-        for (int i = 0; i < 10; i++) {
-            arr[i] = default_val;
-        }
+        for (int i = 0; i < 10; i++) arr[i] = default_val;
         return true;
     }
 
@@ -226,28 +178,19 @@ bool read_int_array(const string& prompt, int arr[10], int default_val = 1) {
             return false;
         }
     }
-
     return true;
 }
 
-/**
- * @brief 主函数
- */
 int main(int argc, char** argv) {
-    // 解析命令行参数
     string target_ip = "192.168.5.159";
     int port = 10000;
 
     for (int i = 1; i < argc; i++) {
         string arg = argv[i];
-        if (arg == "--ip" && i + 1 < argc) {
-            target_ip = argv[++i];
-        } else if (arg == "--port" && i + 1 < argc) {
-            port = atoi(argv[++i]);
-        }
+        if (arg == "--ip" && i + 1 < argc) target_ip = argv[++i];
+        else if (arg == "--port" && i + 1 < argc) port = atoi(argv[++i]);
     }
 
-    // 注册信号处理
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
@@ -257,41 +200,26 @@ int main(int argc, char** argv) {
     cout << "========================================" << endl;
     cout << endl;
 
-    // ========== 步骤1: 输入 default_angles ==========
-    cout << "【步骤 1/3】输入算法层基准姿态 (default_angles)" << endl;
-    cout << "说明：这是训练环境中使用的基准姿态，通常来自训练配置文件" << endl;
-    cout << "      如果训练使用对称站立姿态，通常全部为 0" << endl;
-    cout << endl;
-
+    // ========== 默认 default_angles ==========
     float default_angles[10];
-    if (!read_float_array("请输入 default_angles:", default_angles, 0.0f)) {
-        return 1;
-    }
+    memcpy(default_angles, DEFAULT_ANGLES, sizeof(DEFAULT_ANGLES));
 
-    cout << "\n已设置 default_angles:" << endl;
+    cout << "【默认算法层基准姿态 (default_angles)】" << endl;
     cout << "  左腿: [";
     for (int i = 0; i < 5; i++) {
-        cout << fixed << setprecision(3) << default_angles[i];
+        cout << fixed << setprecision(2) << default_angles[i];
         if (i < 4) cout << ", ";
     }
     cout << "]" << endl;
     cout << "  右腿: [";
     for (int i = 5; i < 10; i++) {
-        cout << fixed << setprecision(3) << default_angles[i];
+        cout << fixed << setprecision(2) << default_angles[i];
         if (i < 9) cout << ", ";
     }
     cout << "]" << endl;
     cout << endl;
 
-    // ========== 步骤2: 读取 offset ==========
-    cout << "【步骤 2/3】标定硬件零点偏置 (offset)" << endl;
-    cout << "说明：请手动调整机器人到期望的站立姿态" << endl;
-    cout << "      然后按 Enter 读取当前编码器值作为 offset" << endl;
-    cout << endl;
-    cout << "按 Enter 继续...";
-    cin.get();
-
-    // 创建UDP socket
+    // ========== 创建UDP socket ==========
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         cerr << "无法创建socket" << endl;
@@ -330,11 +258,104 @@ int main(int argc, char** argv) {
     MsgResponse response;
     memset(&response, 0, sizeof(response));
 
-    float offset[10] = {0};
+    // 获取当前位置
+    float current_pos[10] = {0};
     bool got_feedback = false;
 
-    // 尝试获取反馈
-    for (int i = 0; i < 50 && !got_feedback; i++) {
+    for (int i = 0; i < 50 && !got_feedback && g_running; i++) {
+        sendto(sock, (char*)&response, sizeof(response), 0,
+               (struct sockaddr*)&remote_addr, sizeof(remote_addr));
+
+        socklen_t addr_len = sizeof(remote_addr);
+        if (recvfrom(sock, (char*)&request, sizeof(request), 0,
+                     (struct sockaddr*)&remote_addr, &addr_len) > 0) {
+            memcpy(current_pos, request.q, sizeof(current_pos));
+            got_feedback = true;
+            cout << "已连接 ODroid" << endl;
+        }
+        usleep(10000);
+    }
+
+    if (!got_feedback || !g_running) {
+        cerr << "错误: 无法连接到 ODroid" << endl;
+        close(sock);
+        return 1;
+    }
+
+    cout << "\n当前位置 (Real 空间):" << endl;
+    cout << "  左腿: [";
+    for (int i = 0; i < 5; i++) {
+        cout << fixed << setprecision(4) << current_pos[i];
+        if (i < 4) cout << ", ";
+    }
+    cout << "]" << endl;
+    cout << "  右腿: [";
+    for (int i = 5; i < 10; i++) {
+        cout << fixed << setprecision(4) << current_pos[i];
+        if (i < 9) cout << ", ";
+    }
+    cout << "]" << endl;
+
+    // ========== 计算目标姿态 (Real 空间) ==========
+    // q_real = default_angles * sign_array + offset
+    // 标定时 offset=0, sign_array=1, 所以 q_real = default_angles
+    float target_real[10];
+    memcpy(target_real, default_angles, sizeof(default_angles));
+
+    cout << "\n目标姿态 (Real 空间):" << endl;
+    cout << "  左腿: [";
+    for (int i = 0; i < 5; i++) {
+        cout << fixed << setprecision(4) << target_real[i];
+        if (i < 4) cout << ", ";
+    }
+    cout << "]" << endl;
+    cout << "  右腿: [";
+    for (int i = 5; i < 10; i++) {
+        cout << fixed << setprecision(4) << target_real[i];
+        if (i < 9) cout << ", ";
+    }
+    cout << "]" << endl;
+
+    // ========== 线性插值平滑移动 ==========
+    const int STEPS = 500;
+    cout << "\n正在平滑移动到目标姿态 (" << STEPS << " 步)..." << endl;
+
+    for (int step = 0; step <= STEPS && g_running; step++) {
+        float alpha = (float)step / STEPS;
+
+        for (int i = 0; i < 10; i++) {
+            response.q_exp[i] = current_pos[i] + alpha * (target_real[i] - current_pos[i]);
+        }
+
+        sendto(sock, (char*)&response, sizeof(response), 0,
+               (struct sockaddr*)&remote_addr, sizeof(remote_addr));
+
+        socklen_t addr_len = sizeof(remote_addr);
+        recvfrom(sock, (char*)&request, sizeof(request), 0,
+                 (struct sockaddr*)&remote_addr, &addr_len);
+
+        if (step % 50 == 0) {
+            cout << "  进度: " << (int)(alpha * 100) << "%" << endl;
+        }
+
+        usleep(2000);  // 2ms
+    }
+
+    if (!g_running) {
+        cout << "标定已中断" << endl;
+        close(sock);
+        return 0;
+    }
+
+    cout << "已到达目标姿态" << endl;
+
+    // ========== 等待稳定后读取编码器值 ==========
+    cout << "\n等待姿态稳定 (1秒)..." << endl;
+    usleep(1000000);
+
+    // 读取稳定后的编码器值
+    float q_encoder_stand[10] = {0};
+    for (int i = 0; i < 10 && g_running; i++) {
         sendto(sock, (char*)&response, sizeof(response), 0,
                (struct sockaddr*)&remote_addr, sizeof(remote_addr));
 
@@ -342,97 +363,77 @@ int main(int argc, char** argv) {
         if (recvfrom(sock, (char*)&request, sizeof(request), 0,
                      (struct sockaddr*)&remote_addr, &addr_len) > 0) {
             for (int j = 0; j < 10; j++) {
-                offset[j] = request.q[j];
+                q_encoder_stand[j] += request.q[j];
             }
-            got_feedback = true;
-            cout << "已连接 ODroid" << endl;
         }
-        usleep(10000);
+        usleep(2000);
     }
 
-    close(sock);
+    if (!g_running) {
+        cout << "标定已中断" << endl;
+        close(sock);
+        return 0;
+    }
 
-    if (!got_feedback) {
-        cerr << "错误: 无法连接到 ODroid，请检查网络连接" << endl;
-        return 1;
+    // 取平均值
+    for (int i = 0; i < 10; i++) {
+        q_encoder_stand[i] /= 10.0f;
     }
 
     cout << "\n已读取编码器值 (q_encoder_stand):" << endl;
     cout << "  左腿: [";
     for (int i = 0; i < 5; i++) {
-        cout << fixed << setprecision(3) << offset[i];
+        cout << fixed << setprecision(6) << q_encoder_stand[i];
         if (i < 4) cout << ", ";
     }
     cout << "]" << endl;
     cout << "  右腿: [";
     for (int i = 5; i < 10; i++) {
-        cout << fixed << setprecision(3) << offset[i];
+        cout << fixed << setprecision(6) << q_encoder_stand[i];
         if (i < 9) cout << ", ";
     }
     cout << "]" << endl;
 
-    // ========== 计算 offset = q_encoder_stand - default_angles ==========
-    cout << "\n计算 offset = q_encoder_stand - default_angles:" << endl;
+    // ========== 计算 offset ==========
+    float offset[10];
     for (int i = 0; i < 10; i++) {
-        offset[i] = offset[i] - default_angles[i];
+        offset[i] = q_encoder_stand[i] - default_angles[i];
     }
+
+    cout << "\n计算 offset = q_encoder_stand - default_angles:" << endl;
     cout << "  左腿: [";
     for (int i = 0; i < 5; i++) {
-        cout << fixed << setprecision(3) << offset[i];
+        cout << fixed << setprecision(6) << offset[i];
         if (i < 4) cout << ", ";
     }
     cout << "]" << endl;
     cout << "  右腿: [";
     for (int i = 5; i < 10; i++) {
-        cout << fixed << setprecision(3) << offset[i];
+        cout << fixed << setprecision(6) << offset[i];
         if (i < 9) cout << ", ";
     }
     cout << "]" << endl;
-    cout << endl;
 
-    // ========== 步骤3: 输入 sign_array ==========
-    cout << "【步骤 3/3】配置关节方向映射 (sign_array)" << endl;
-    cout << "说明：定义每个关节的旋转方向" << endl;
-    cout << "      1 = 与训练环境方向一致" << endl;
-    cout << "      -1 = 与训练环境方向相反" << endl;
-    cout << "      建议：先使用默认值 [1 × 10]，然后通过测试工具逐关节验证" << endl;
-    cout << endl;
-
+    // ========== 输入 sign_array ==========
+    cout << "\n【配置关节方向映射 (sign_array)】" << endl;
     int sign_array[10];
     if (!read_int_array("请输入 sign_array:", sign_array, 1)) {
+        close(sock);
         return 1;
     }
-
-    cout << "\n已设置 sign_array:" << endl;
-    cout << "  左腿: [";
-    for (int i = 0; i < 5; i++) {
-        cout << setw(2) << sign_array[i];
-        if (i < 4) cout << ", ";
-    }
-    cout << "]" << endl;
-    cout << "  右腿: [";
-    for (int i = 5; i < 10; i++) {
-        cout << setw(2) << sign_array[i];
-        if (i < 9) cout << ", ";
-    }
-    cout << "]" << endl;
-    cout << endl;
 
     // ========== 保存配置文件 ==========
     string output_file = "robot.yaml";
-    cout << "正在保存配置到: " << output_file << endl;
+    cout << "\n正在保存配置到: " << output_file << endl;
 
     if (save_yaml(default_angles, offset, sign_array, output_file)) {
         cout << "✓ 标定完成！配置已保存到: " << output_file << endl;
-        cout << endl;
-        cout << "下一步建议：" << endl;
-        cout << "  1. 使用 test_init_pose 测试机器人是否能正确回到站立姿态" << endl;
-        cout << "  2. 使用 test_motors 逐关节测试方向是否正确" << endl;
-        cout << "  3. 根据测试结果调整 sign_array" << endl;
     } else {
         cerr << "✗ 保存配置文件失败" << endl;
+        close(sock);
         return 1;
     }
 
+    close(sock);
     return 0;
 }

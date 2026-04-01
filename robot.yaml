@@ -19,9 +19,9 @@ robot_config:
     right_leg:
       yaw:   0.0  # rad
       roll:  0.0  # rad
-      pitch: -0.18  # rad (IsaacLab 初始姿态)
-      knee:  -1.11  # rad (IsaacLab 初始姿态)
-      ankle: -0.92  # rad (IsaacLab 初始姿态)
+      pitch: 0.18  # rad (IsaacLab 初始姿态)
+      knee:  1.11  # rad (IsaacLab 初始姿态)
+      ankle: 0.92  # rad (IsaacLab 初始姿态)
 
   # ========================================
   # 硬件零点偏置 (offset)

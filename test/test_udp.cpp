@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
 
     // 设置固定的测试响应值
     for (int i = 0; i < 10; i++) {
-        response.q_exp[i] = 0.1f * (i + 1);  // 0.1, 0.2, ..., 1.0
+        response.q_exp[i] = 0.0;  
     }
 
     socklen_t addr_len = sizeof(remote_addr);

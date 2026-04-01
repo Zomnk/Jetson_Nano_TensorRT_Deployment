@@ -367,30 +367,30 @@ void TRTInference::updateHistoryBuffer(const float* obs) {
 void TRTInference::buildObservation(const MsgRequest& request, float* obs) {
     int idx = 0;
 
-    // [0-2] 角速度 (rad/s)
+    // [0-2] 角速度 (rad/s) - Waveshare IMU
     obs[idx++] = request.omega[0] * OMEGA_SCALE;
     obs[idx++] = request.omega[1] * OMEGA_SCALE;
     obs[idx++] = request.omega[2] * OMEGA_SCALE;
 
-    // [3-5] 投影重力向量（从Waveshare IMU欧拉角计算）
+    // [3-5] 投影重力向量 - 从Waveshare IMU欧拉角计算
     float gravity_proj[3];
     computeProjectedGravity(request.eu_ang, gravity_proj);
     obs[idx++] = gravity_proj[0];
     obs[idx++] = gravity_proj[1];
     obs[idx++] = gravity_proj[2];
 
-    // [6-8] 速度控制指令 [vx, vy, yaw_rate]
+    // [6-8] 速度控制指令 [vx, vy, yaw_rate] - 手柄/外部
     obs[idx++] = request.command[0];
     obs[idx++] = request.command[1];
     obs[idx++] = request.command[2];
 
-    // [9-18] 关节位置偏差（Real→Sim映射后相对于default_angles的偏差）
+    // [9-18] 关节位置偏差 - 电机编码器 (Real→Sim映射)
     for (int i = 0; i < DOF_NUM; ++i) {
         float q_sim = (request.q[i] - offset_[i]) * sign_array_[i];
         obs[idx++] = (q_sim - default_angles_[i]) * sign_array_[i];
     }
 
-    // [19-28] 关节速度（Real→Sim映射）
+    // [19-28] 关节速度 - 电机编码器 (Real→Sim映射)
     for (int i = 0; i < DOF_NUM; ++i) {
         float dq_sim = request.dq[i] * sign_array_[i];
         obs[idx++] = dq_sim * sign_array_[i];
