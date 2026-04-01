@@ -1,9 +1,10 @@
 /**
  * @file test_projected_gravity.cpp
- * @brief 使用下位机实时IMU数据对比欧拉角和四元数计算投影重力向量的差异
+ * @brief 使用Waveshare IMU四元数对比欧拉角和四元数计算投影重力向量的差异
  *
- * @details 通过UDP接收ODroid发送的MsgRequest，提取欧拉角和四元数，
- *          分别计算投影重力向量并实时对比误差。
+ * @details 通过UDP接收ODroid发送的MsgRequest，提取Waveshare IMU的四元数，
+ *          从四元数解算欧拉角，然后分别用欧拉角和四元数计算投影重力向量并实时对比误差。
+ *          两种方法的输入都来自同一个Waveshare IMU传感器，确保数据一致性。
  *
  * 使用方法：
  *   ./test_projected_gravity [port]
@@ -19,6 +20,32 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+// 从四元数解算欧拉角（ZYX顺序: yaw-pitch-roll）
+void quatToEuler(const float quat[4], float euler[3]) {
+    float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
+
+    // roll (x-axis rotation)
+    float sinr_cosp = 2.0f * (w * x + y * z);
+    float cosr_cosp = 1.0f - 2.0f * (x * x + y * y);
+    euler[0] = std::atan2(sinr_cosp, cosr_cosp);
+
+    // pitch (y-axis rotation)
+    float sinp = 2.0f * (w * y - z * x);
+    if (std::abs(sinp) >= 1.0f)
+        euler[1] = std::copysign(M_PI / 2.0f, sinp);
+    else
+        euler[1] = std::asin(sinp);
+
+    // yaw (z-axis rotation)
+    float siny_cosp = 2.0f * (w * z + x * y);
+    float cosy_cosp = 1.0f - 2.0f * (y * y + z * z);
+    euler[2] = std::atan2(siny_cosp, cosy_cosp);
+}
 
 // 从欧拉角计算投影重力向量（与 trt_inference.cpp 一致）
 void computeProjectedGravityFromEuler(const float eu_ang[3], float gravity_proj[3]) {
@@ -96,6 +123,7 @@ int main(int argc, char** argv) {
               << std::setw(10) << "误差"
               << std::endl;
     std::cout << std::string(108, '-') << std::endl;
+    std::cout << "注: 欧拉角从四元数解算，与四元数来自同一Waveshare IMU传感器" << std::endl;
 
     float max_error = 0.0f;
     float total_error = 0.0f;
@@ -121,8 +149,12 @@ int main(int argc, char** argv) {
             continue;
         }
 
+        // 从Waveshare IMU四元数解算欧拉角（确保与四元数来自同一传感器）
+        float quat_euler[3];
+        quatToEuler(request.quat, quat_euler);
+
         float g_euler[3], g_quat[3];
-        computeProjectedGravityFromEuler(request.eu_ang, g_euler);
+        computeProjectedGravityFromEuler(quat_euler, g_euler);
         computeProjectedGravityFromQuat(request.quat, g_quat);
 
         float error = 0.0f;
@@ -138,8 +170,8 @@ int main(int argc, char** argv) {
         // 每行输出
         std::cout << std::left << std::fixed
                   << std::setw(6) << count
-                  << std::setprecision(4) << std::setw(12) << request.eu_ang[0]
-                  << std::setprecision(4) << std::setw(12) << request.eu_ang[1]
+                  << std::setprecision(4) << std::setw(12) << quat_euler[0]
+                  << std::setprecision(4) << std::setw(12) << quat_euler[1]
                   << std::setprecision(4) << std::setw(10) << request.quat[0]
                   << std::setprecision(4) << std::setw(10) << request.quat[1]
                   << std::setprecision(4) << std::setw(10) << request.quat[2]
