@@ -22,12 +22,8 @@
  * @brief TensorRT推理引擎类
  *
  * @details 封装了TensorRT引擎的加载、推理和资源管理。
- *          主要功能：
- *          1. 加载序列化的TensorRT引擎文件（.engine）
- *          2. 构建观测向量（39维）
- *          3. 维护历史观测缓存（用于时序模型）
- *          4. 执行GPU推理（输入：当前观测 + 历史观测缓存）
- *          5. 输出动作向量（10维）
+ *          模型输入：390维 term-major 历史观测缓存 [1, 390]
+ *          模型输出：10维动作向量 [1, 10]
  */
 class TRTInference {
 public:
@@ -79,24 +75,18 @@ public:
     /**
      * @brief 重置推理状态
      *
-     * @details 清零上次动作缓存和控制指令滤波器，
-     *          通常在开始新的控制周期时调用。
+     * @details 清零上次动作缓存和历史观测缓冲区，
+     *          通常在开始新的控制周期或故障恢复时调用。
      */
     void reset();
 
     /**
      * @brief 执行推理
      * @param request ODroid发送的请求消息（包含机器人状态）
-     * @param action_out 输出的动作数组（10个关节目标位置）
+     * @param action_out 输出的动作数组（10个关节目标位置，Real空间）
      * @return 推理成功返回true，失败返回false
      *
-     * @details 执行以下操作：
-     *          1. 检查触发标志（trigger必须为1.0）
-     *          2. 构建39维观测向量
-     *          3. 将数据拷贝到GPU
-     *          4. 执行TensorRT推理
-     *          5. 将结果拷贝回CPU
-     *          6. 应用动作滤波和限幅
+     * @details 构建观测向量 → 更新历史缓存 → GPU推理 → Sim→Real映射
      */
     bool infer(const MsgRequest& request, float* action_out);
 
@@ -116,6 +106,16 @@ private:
      *          用于表示机器人的倾斜状态
      */
     void computeProjectedGravity(const float eu_ang[3], float gravity_proj[3]);
+
+    /**
+     * @brief 从四元数计算投影重力向量
+     * @param quat 四元数 [w, x, y, z]
+     * @param gravity_proj 输出的投影重力向量
+     *
+     * @details 使用四元数旋转变换将世界坐标系重力 [0, 0, -1]
+     *          变换到机体坐标系，得到投影重力向量
+     */
+    void computeProjectedGravityFromQuat(const float quat[4], float gravity_proj[3]);
 
     /**
      * @brief 构建当前帧观测向量
@@ -180,9 +180,8 @@ private:
     float default_angles_[DOF_NUM]; ///< 算法层基准姿态（训练时的默认姿态）
     float offset_[DOF_NUM];         ///< 硬件零点偏置（每台机器独立标定）
     int sign_array_[DOF_NUM];       ///< 关节方向映射（1 或 -1）
-    float last_action_[ACTION_DIM]; ///< 上次动作（用于观测和滤波）
-    float action_temp_[ACTION_DIM]; ///< 临时动作缓存（限幅后，用于观测构建）
-    float cmd_x_, cmd_y_, cmd_rate_;///< 滤波后的控制指令
+    float last_action_[ACTION_DIM]; ///< 上次动作（用于观测构建）
+    float action_temp_[ACTION_DIM]; ///< 临时动作缓存（网络原始输出，用于观测构建）
     float last_obs_[OBS_DIM];       ///< 最后一次的观测向量（用于调试输出）
 
     /*
@@ -211,14 +210,7 @@ private:
      * 缩放参数（与 IsaacLab 训练保持一致）
      * ============================================================
      */
-    static constexpr float OMEGA_SCALE = 1.0f;      ///< 角速度缩放系数（改为 1.0，适配 IsaacLab）
-    static constexpr float EU_ANG_SCALE = 1.0f;     ///< 欧拉角缩放系数
-    static constexpr float POS_SCALE = 1.0f;        ///< 位置缩放系数
-    static constexpr float VEL_SCALE = 1.0f;        ///< 速度缩放系数（改为 1.0，适配 IsaacLab）
-    static constexpr float LIN_VEL_SCALE = 1.0f;    ///< 线速度指令缩放系数（改为 1.0，适配 IsaacLab）
-    static constexpr float ANG_VEL_SCALE = 1.0f;    ///< 角速度指令缩放系数（改为 1.0，适配 IsaacLab）
-    static constexpr float SMOOTH = 0.0f;           ///< 控制指令平滑系数（改为 0.0，禁用滤波）
-    static constexpr float DEAD_ZONE = 0.0f;        ///< 控制指令死区（改为 0.0，禁用死区）
+    static constexpr float OMEGA_SCALE = 1.0f;      ///< 角速度缩放系数
 
     bool engine_loaded_;    ///< 引擎加载状态标志
 };

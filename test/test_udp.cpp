@@ -134,10 +134,43 @@ int main(int argc, char** argv) {
             // 每0.5秒打印一次状态
             if (recv_count % 250 == 0) {
                 cout << "\n[#" << recv_count << "] 收发正常" << endl;
-                cout << "  trigger: " << request.trigger << endl;
-                cout << "  q[0-4]: [" << request.q[0] << ", " << request.q[1]
-                     << ", " << request.q[2] << ", " << request.q[3]
-                     << ", " << request.q[4] << "]" << endl;
+                cout << "  trigger: " << fixed << setprecision(2) << request.trigger << endl;
+                cout << "  command: [" << setprecision(4) << request.command[0] << ", "
+                     << request.command[1] << ", " << request.command[2] << ", "
+                     << request.command[3] << "]" << endl;
+                cout << "  eu_ang:  [" << setprecision(6) << request.eu_ang[0] << ", "
+                     << request.eu_ang[1] << ", " << request.eu_ang[2] << "]" << endl;
+                cout << "  omega:   [" << request.omega[0] << ", "
+                     << request.omega[1] << ", " << request.omega[2] << "]" << endl;
+                cout << "  acc:     [" << request.acc[0] << ", "
+                     << request.acc[1] << ", " << request.acc[2] << "]" << endl;
+                cout << "  q:       [";
+                for (int i = 0; i < 10; i++) {
+                    cout << setprecision(6) << request.q[i];
+                    if (i < 9) cout << ", ";
+                }
+                cout << "]" << endl;
+                cout << "  dq:      [";
+                for (int i = 0; i < 10; i++) {
+                    cout << setprecision(6) << request.dq[i];
+                    if (i < 9) cout << ", ";
+                }
+                cout << "]" << endl;
+                cout << "  tau:     [";
+                for (int i = 0; i < 10; i++) {
+                    cout << setprecision(4) << request.tau[i];
+                    if (i < 9) cout << ", ";
+                }
+                cout << "]" << endl;
+                cout << "  init_pos:[";
+                for (int i = 0; i < 10; i++) {
+                    cout << setprecision(6) << request.init_pos[i];
+                    if (i < 9) cout << ", ";
+                }
+                cout << "]" << endl;
+                cout << "  quat:    [" << request.quat[0] << ", "
+                     << request.quat[1] << ", " << request.quat[2] << ", "
+                     << request.quat[3] << "]" << endl;
             }
         }
     }

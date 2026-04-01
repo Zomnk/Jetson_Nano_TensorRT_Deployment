@@ -41,29 +41,23 @@ public:
  *          - 引擎加载标志设为false
  */
 TRTInference::TRTInference()
-    : stream_(nullptr)          // CUDA流
-    , d_obs_buf_(nullptr)       // GPU输入缓冲区 - 历史观测缓存
-    , d_output_(nullptr)        // GPU输出缓冲区
-    , cmd_x_(0), cmd_y_(0), cmd_rate_(0)  // 滤波后的控制指令
-    , engine_loaded_(false) {   // 引擎未加载
-    // 初始化硬件配置为默认值
+    : stream_(nullptr)
+    , d_obs_buf_(nullptr)
+    , d_output_(nullptr)
+    , engine_loaded_(false)
+{
     std::fill(default_angles_, default_angles_ + DOF_NUM, 0.0f);
     std::fill(offset_, offset_ + DOF_NUM, 0.0f);
     std::fill(sign_array_, sign_array_ + DOF_NUM, 1);
-    // 初始化上次动作为全零
     std::fill(last_action_, last_action_ + ACTION_DIM, 0.0f);
-    // 初始化临时动作缓存为全零
     std::fill(action_temp_, action_temp_ + ACTION_DIM, 0.0f);
-    // 初始化所有 term 独立历史缓冲区为全零（IsaacLab term-major）
     std::fill(hist_ang_vel_, hist_ang_vel_ + HISTORY_LENGTH * ANG_VEL_DIM, 0.0f);
     std::fill(hist_gravity_, hist_gravity_ + HISTORY_LENGTH * GRAVITY_DIM, 0.0f);
     std::fill(hist_cmd_, hist_cmd_ + HISTORY_LENGTH * CMD_DIM, 0.0f);
     std::fill(hist_joint_pos_, hist_joint_pos_ + HISTORY_LENGTH * JOINT_DIM, 0.0f);
     std::fill(hist_joint_vel_, hist_joint_vel_ + HISTORY_LENGTH * JOINT_DIM, 0.0f);
     std::fill(hist_action_, hist_action_ + HISTORY_LENGTH * JOINT_DIM, 0.0f);
-    // 初始化拼接后的历史观测缓存为全零
     std::fill(obs_buf_, obs_buf_ + HISTORY_LENGTH * OBS_DIM, 0.0f);
-    // 初始化最后一次观测为全零
     std::fill(last_obs_, last_obs_ + OBS_DIM, 0.0f);
 }
 
@@ -193,21 +187,18 @@ void TRTInference::setInitPose(const float* init_pos) {
  *
  * @details 清零所有状态缓存：
  *          - 上次动作
- *          - 滤波后的控制指令
- *          通常在开始新的控制周期时调用。
+ *          - 历史观测缓冲区
+ *          通常在开始新的控制周期或故障恢复时调用。
  */
 void TRTInference::reset() {
     std::fill(last_action_, last_action_ + ACTION_DIM, 0.0f);
     std::fill(action_temp_, action_temp_ + ACTION_DIM, 0.0f);
-    cmd_x_ = cmd_y_ = cmd_rate_ = 0.0f;
-    // 重置所有 term 独立历史缓冲区
     std::fill(hist_ang_vel_, hist_ang_vel_ + HISTORY_LENGTH * ANG_VEL_DIM, 0.0f);
     std::fill(hist_gravity_, hist_gravity_ + HISTORY_LENGTH * GRAVITY_DIM, 0.0f);
     std::fill(hist_cmd_, hist_cmd_ + HISTORY_LENGTH * CMD_DIM, 0.0f);
     std::fill(hist_joint_pos_, hist_joint_pos_ + HISTORY_LENGTH * JOINT_DIM, 0.0f);
     std::fill(hist_joint_vel_, hist_joint_vel_ + HISTORY_LENGTH * JOINT_DIM, 0.0f);
     std::fill(hist_action_, hist_action_ + HISTORY_LENGTH * JOINT_DIM, 0.0f);
-    // 重置拼接后的 obs_buf_
     std::fill(obs_buf_, obs_buf_ + HISTORY_LENGTH * OBS_DIM, 0.0f);
     if (d_obs_buf_) {
         cudaMemset(d_obs_buf_, 0, HISTORY_LENGTH * OBS_DIM * sizeof(float));
@@ -248,6 +239,24 @@ void TRTInference::computeProjectedGravity(const float eu_ang[3], float gravity_
     gravity_proj[0] = sin_pitch;
     gravity_proj[1] = -sin_roll * cos_pitch;
     gravity_proj[2] = -cos_roll * cos_pitch;
+}
+
+/**
+ * @brief 从四元数计算投影重力向量
+ *
+ * @details 四元数 [w, x, y, z] 表示从世界坐标系到机体坐标系的旋转。
+ *          世界坐标系中重力向量为 [0, 0, -1]（单位化）。
+ *          使用四元数旋转变换：g_body = q * g_world * q_conjugate
+ *          展开后得到：
+ *            gx = 2*(x*z - w*y)
+ *            gy = 2*(y*z + w*x)
+ *            gz = 1 - 2*(x*x + y*y)
+ */
+void TRTInference::computeProjectedGravityFromQuat(const float quat[4], float gravity_proj[3]) {
+    float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
+    gravity_proj[0] = 2.0f * (x * z - w * y);
+    gravity_proj[1] = 2.0f * (y * z + w * x);
+    gravity_proj[2] = 1.0f - 2.0f * (x * x + y * y);
 }
 
 /**
@@ -340,15 +349,15 @@ void TRTInference::updateHistoryBuffer(const float* obs) {
  * @details 将机器人状态转换为39维观测向量，作为神经网络的输入。
  *          观测向量的组成（与训练时保持一致）：
  *
- *          索引范围    维度    内容                    缩放系数
- *          ─────────────────────────────────────────────────────
- *          [0-2]       3      角速度 (rad/s)          × 0.25
- *          [3-5]       3      欧拉角 (rad)            × 1.0
- *          [6-8]       3      控制指令 (滤波后)       × 2.0/0.25
- *          [9-18]      10     关节位置偏差 (rad)      × 1.0
- *          [19-28]     10     关节速度 (rad/s)        × 0.05
- *          [29-38]     10     上次动作                × 1.0
- *          ─────────────────────────────────────────────────────
+ *          索引范围    维度    内容
+ *          ─────────────────────────────────
+ *          [0-2]       3      角速度 (rad/s)
+ *          [3-5]       3      投影重力向量
+ *          [6-8]       3      控制指令
+ *          [9-18]      10     关节位置偏差 (rad)
+ *          [19-28]     10     关节速度 (rad/s)
+ *          [29-38]     10     上次动作
+ *          ─────────────────────────────────
  *          总计        39
  *
  * @param request 请求消息（包含机器人状态）
@@ -357,48 +366,36 @@ void TRTInference::updateHistoryBuffer(const float* obs) {
 void TRTInference::buildObservation(const MsgRequest& request, float* obs) {
     int idx = 0;
 
-    // ========== [0-2] 角速度 ==========
-    // IMU测量的机身角速度，乘以缩放系数（现在为 1.0，适配 IsaacLab）
+    // [0-2] 角速度 (rad/s)
     obs[idx++] = request.omega[0] * OMEGA_SCALE;
     obs[idx++] = request.omega[1] * OMEGA_SCALE;
     obs[idx++] = request.omega[2] * OMEGA_SCALE;
 
-    // ========== [3-5] 投影重力向量 ==========
-    // 改为使用投影重力向量而不是欧拉角，适配 IsaacLab
+    // [3-5] 投影重力向量（从欧拉角计算）
     float gravity_proj[3];
     computeProjectedGravity(request.eu_ang, gravity_proj);
     obs[idx++] = gravity_proj[0];
     obs[idx++] = gravity_proj[1];
     obs[idx++] = gravity_proj[2];
 
-    // ========== [6-8] 控制指令 ==========
-    // 改为直接使用控制指令，不进行死区、滤波、缩放，适配 IsaacLab
+    // [6-8] 速度控制指令 [vx, vy, yaw_rate]
     obs[idx++] = request.command[0];
     obs[idx++] = request.command[1];
     obs[idx++] = request.command[2];
 
-    // ========== [9-18] 关节位置偏差 ==========
-    // 应用 Real→Sim 映射，然后计算相对于 default_angles 的偏差
-    // 改为应用方向掩码（sign_array），适配 IsaacLab
-    // q_sim = (q_real - offset) * sign_array
-    // obs = (q_sim - default_angles) * sign_array
+    // [9-18] 关节位置偏差（Real→Sim映射后相对于default_angles的偏差）
     for (int i = 0; i < DOF_NUM; ++i) {
         float q_sim = (request.q[i] - offset_[i]) * sign_array_[i];
         obs[idx++] = (q_sim - default_angles_[i]) * sign_array_[i];
     }
 
-    // ========== [19-28] 关节速度 ==========
-    // 应用 Real→Sim 映射
-    // 改为应用方向掩码（sign_array），适配 IsaacLab
-    // dq_sim = dq_real * sign_array
-    // obs = dq_sim * sign_array
+    // [19-28] 关节速度（Real→Sim映射）
     for (int i = 0; i < DOF_NUM; ++i) {
         float dq_sim = request.dq[i] * sign_array_[i];
         obs[idx++] = dq_sim * sign_array_[i];
     }
 
-    // ========== [29-38] 上次动作 ==========
-    // 上一个控制周期输出的动作（使用限幅后的值，与 LibTorch 版本一致）
+    // [29-38] 上次动作（上一周期网络原始输出）
     for (int i = 0; i < ACTION_DIM; ++i)
         obs[idx++] = action_temp_[i];
 }
@@ -408,16 +405,15 @@ void TRTInference::buildObservation(const MsgRequest& request, float* obs) {
  *
  * @details 完整的推理流程：
  *          1. 检查触发标志和引擎状态
- *          2. 更新初始姿态（从请求消息）
- *          3. 构建39维观测向量
- *          4. 将观测数据拷贝到GPU
- *          5. 执行TensorRT推理
- *          6. 将结果拷贝回CPU
- *          7. 应用动作滤波（80%新动作 + 20%旧动作）
- *          8. 应用限幅（±15.0）
+ *          2. 构建39维观测向量
+ *          3. 将历史观测缓存拷贝到GPU
+ *          4. 执行TensorRT推理（输入390维term-major，输出10维动作）
+ *          5. 将结果拷贝回CPU
+ *          6. 更新历史观测缓存（滑动窗口）
+ *          7. 应用 Sim→Real 坐标映射
  *
  * @param request ODroid发送的请求消息
- * @param action_out 输出的动作数组（10个关节目标位置）
+ * @param action_out 输出的动作数组（10个关节目标位置，Real空间）
  * @return 推理成功返回true，失败返回false
  */
 bool TRTInference::infer(const MsgRequest& request, float* action_out) {
@@ -427,61 +423,41 @@ bool TRTInference::infer(const MsgRequest& request, float* action_out) {
     // 检查触发标志，只有trigger=1.0时才执行推理
     if (request.trigger != 1.0f) return false;
 
-    // 注意: init_pos_ 仅在启动时通过 setInitPose() 从 robot.yaml 加载
-    // 不再从 request.init_pos 动态更新，确保使用标定值
-
-    // ========== 构建当前观测向量 ==========
+    // 构建当前帧观测向量 (39维, frame-major)
     float obs[OBS_DIM];
     buildObservation(request, obs);
 
-    // ========== 拷贝数据到GPU ==========
-    // 拷贝历史观测缓存到GPU（模型唯一输入）
+    // 拷贝历史观测缓存到GPU（模型唯一输入，390维 term-major）
     cudaMemcpyAsync(d_obs_buf_, obs_buf_, HISTORY_LENGTH * OBS_DIM * sizeof(float), cudaMemcpyHostToDevice, stream_);
 
-    // ========== 执行TensorRT推理 ==========
+    // 执行TensorRT推理
     // 模型输入：obs [1, 390] (term-major 历史缓冲区)
     // 模型输出：actions [1, 10]
-    // 根据TensorRT版本选择不同的API
 #if NV_TENSORRT_MAJOR >= 8 && NV_TENSORRT_MINOR >= 5
-    // TensorRT 8.5+ 新API
     context_->setTensorAddress("obs", d_obs_buf_);
     context_->setTensorAddress("actions", d_output_);
     context_->enqueueV3(stream_);
 #else
-    // TensorRT 8.2-8.4 旧API
-    // bindings顺序需要与ONNX模型的输入输出顺序一致
-    // [0] obs, [1] actions
     void* bindings[] = {d_obs_buf_, d_output_};
     context_->enqueueV2(bindings, stream_, nullptr);
 #endif
 
-    // ========== 拷贝结果回CPU ==========
+    // 拷贝推理结果回CPU
     float output[ACTION_DIM];
     cudaMemcpyAsync(output, d_output_, ACTION_DIM * sizeof(float), cudaMemcpyDeviceToHost, stream_);
-
-    // 等待所有CUDA操作完成
     cudaStreamSynchronize(stream_);
 
-    // ========== 更新历史观测缓存（term-major 滑动窗口） ==========
+    // 更新历史观测缓存（term-major 滑动窗口，将当前帧加入）
     updateHistoryBuffer(obs);
 
-    // ========== 动作后处理 ==========
-    // 改为直接使用网络输出，不进行滤波和限幅，适配 IsaacLab
+    // 保存网络原始输出，用于下次观测构建
     for (int i = 0; i < ACTION_DIM; ++i) {
-        // 直接使用网络输出，不进行 80%新+20%旧 的混合
-        float processed = output[i];
-
-        // 保存用于下次观测
-        action_temp_[i] = processed;
+        action_temp_[i] = output[i];
         last_action_[i] = output[i];
     }
 
-    // ========== 应用 Sim→Real 映射 ==========
-    // 将算法空间的动作转换为电机空间的命令
-    // 1. 先将动作缩放并加上 default_angles，得到 Sim 空间的目标位置
-    // 2. 然后应用 sign 和 offset，转换为 Real 空间的电机命令
+    // Sim→Real 坐标映射：将算法空间动作转换为电机空间命令
     // 公式：q_real = (action * 0.25 + default_angles) * sign_array + offset
-    // 其中 offset = q_encoder_stand - default_angles
     for (int i = 0; i < ACTION_DIM; ++i) {
         float q_sim_target = action_temp_[i] * 0.25f + default_angles_[i];
         action_out[i] = q_sim_target * sign_array_[i] + offset_[i];

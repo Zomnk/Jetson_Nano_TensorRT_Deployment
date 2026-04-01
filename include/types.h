@@ -19,7 +19,7 @@
  *
  * @details 包含机器人的完整状态信息，作为强化学习模型的输入。
  *          数据由ODroid从STM32采集后通过UDP发送给Jetson。
- *          总大小: 1 + 4 + 3 + 3 + 3 + 10 + 10 + 10 + 10 = 54个float = 216字节
+ *          总大小: 1 + 4 + 3 + 3 + 3 + 10 + 10 + 10 + 10 + 4 = 58个float = 232字节
  */
 struct MsgRequest {
     float trigger;          ///< 触发标志: 1.0表示开始推理, 其他值表示待机
@@ -31,6 +31,7 @@ struct MsgRequest {
     float dq[10];           ///< 关节速度: 10个关节的当前角速度 单位:rad/s
     float tau[10];          ///< 关节力矩: 10个关节的当前力矩 单位:Nm
     float init_pos[10];     ///< 初始位置: 标定的初始站立姿态 单位:弧度
+    float quat[4];          ///< 四元数: [w, x, y, z] 来自Waveshare IMU
 };
 
 /**

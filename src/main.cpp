@@ -377,19 +377,18 @@ int main(int argc, char** argv) {
     MsgResponse response;
     std::memset(&response, 0, sizeof(response));
 
-    // ========== 问题1: 用init_pos初始化response ==========
-    // 避免第一个数据包发送零位置指令
+    // 用初始姿态初始化response，避免第一个数据包发送零位置指令
     for (int i = 0; i < ACTION_DIM; ++i) {
         response.q_exp[i] = init_pose_real[i];
     }
 
-    int loop_count = 0;   // 循环计数
-    int infer_count = 0;  // 推理计数
+    int loop_count = 0;
+    int infer_count = 0;
 
     // 记录程序启动时间
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // ========== 主控制循环 ==========
+    // 主控制循环 (500Hz, 2ms周期)
     while (g_running) {
         gamepad.update();
 
@@ -421,11 +420,9 @@ int main(int argc, char** argv) {
             }
 
             float action[ACTION_DIM];
-
-            // 执行推理
             bool infer_success = inference.infer(request, action);
 
-            // ========== 检查输出中是否有NaN ==========
+            // NaN检测
             bool has_nan = false;
             if (infer_success) {
                 for (int i = 0; i < ACTION_DIM; ++i) {
@@ -436,11 +433,8 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // ========== 推理失败、trigger!=1.0或输出有NaN时的处理 ==========
+            // 推理成功：直接使用映射后的动作
             if (infer_success && !has_nan) {
-                // 推理成功且无NaN，直接使用推理结果（与IsaacLab训练一致，无滤波无限幅）
-                // action 已经在 infer() 中完成了 Sim→Real 映射
-                // 映射公式：q_real = (action * 0.25 + default_angles) * sign_array + offset
                 for (int i = 0; i < ACTION_DIM; ++i) {
                     response.q_exp[i] = action[i];
                 }
@@ -458,61 +452,41 @@ int main(int argc, char** argv) {
 
                 // 每0.5秒打印一次状态（250次 × 2ms = 500ms）
                 if (infer_count % 250 == 0) {
-                    // 获取观测向量
                     float obs[OBS_DIM];
                     inference.getLastObservation(obs);
 
                     std::cout << "[推理 #" << infer_count << "]" << std::endl;
-
-                    // 打印观测值（39维）
                     std::cout << "  角速度: w_x=" << std::fixed << std::setprecision(6) << obs[0]
                               << " w_y=" << obs[1] << " w_z=" << obs[2] << std::endl;
-
-                    std::cout << "  欧拉角: roll=" << obs[3] << " pitch=" << obs[4] << " yaw=" << obs[5] << std::endl;
-
+                    std::cout << "  投影重力: gx=" << obs[3] << " gy=" << obs[4] << " gz=" << obs[5] << std::endl;
                     std::cout << "  控制指令: cmd_vx=" << obs[6] << " cmd_vy=" << obs[7] << " cmd_dyaw=" << obs[8] << std::endl;
-
                     std::cout << "  关节位置: ";
-                    for (int i = 0; i < 10; i++) {
-                        std::cout << obs[9 + i] << " ";
-                    }
+                    for (int i = 0; i < 10; i++) std::cout << obs[9 + i] << " ";
                     std::cout << std::endl;
-
                     std::cout << "  关节速度: ";
-                    for (int i = 0; i < 10; i++) {
-                        std::cout << obs[19 + i] << " ";
-                    }
+                    for (int i = 0; i < 10; i++) std::cout << obs[19 + i] << " ";
                     std::cout << std::endl;
-
                     std::cout << "  上一步动作: ";
-                    for (int i = 0; i < 10; i++) {
-                        std::cout << obs[29 + i] << " ";
-                    }
+                    for (int i = 0; i < 10; i++) std::cout << obs[29 + i] << " ";
                     std::cout << std::endl;
-
                     std::cout << "  动作输出: ";
-                    for (int i = 0; i < ACTION_DIM; ++i) {
-                        std::cout << response.q_exp[i] << " ";
-                    }
+                    for (int i = 0; i < ACTION_DIM; ++i) std::cout << response.q_exp[i] << " ";
                     std::cout << std::endl;
                 }
             } else {
-                // 推理失败、trigger!=1.0或输出有NaN，终止推理并回到初始姿态
+                // 推理失败或NaN：回到初始姿态
                 if (has_nan) {
                     std::cout << "\n[错误] 推理输出包含NaN，终止推理" << std::endl;
                 } else if (!infer_success) {
                     std::cout << "\n[错误] 推理失败或trigger!=1.0，终止推理" << std::endl;
                 }
-
                 std::cout << "正在回到初始姿态..." << std::endl;
                 moveToInitPose(udp, init_pose_real);
 
-                // 重新初始化response
                 std::memset(&response, 0, sizeof(response));
                 for (int i = 0; i < ACTION_DIM; ++i) {
                     response.q_exp[i] = init_pose_real[i];
                 }
-
                 std::cout << "已回到初始姿态，重新开始控制循环" << std::endl;
                 std::cout << "========================================" << std::endl;
             }
@@ -522,14 +496,13 @@ int main(int argc, char** argv) {
         usleep(2000);  // 2ms，500Hz
     }
 
-    // ========== 打印退出信息 ==========
+    // 退出：打印统计信息并导出CSV
     std::cout << "\n========================================" << std::endl;
     std::cout << "程序已退出" << std::endl;
     std::cout << "总循环次数: " << loop_count << std::endl;
     std::cout << "总推理次数: " << infer_count << std::endl;
     std::cout << "========================================" << std::endl;
 
-    // 导出推理数据到CSV文件
     if (!g_inference_records.empty()) {
         exportInferenceDataToCSV("../data/inference_data.csv");
     } else {
@@ -537,6 +510,5 @@ int main(int argc, char** argv) {
     }
 
     gamepad.close();
-
     return 0;
 }
