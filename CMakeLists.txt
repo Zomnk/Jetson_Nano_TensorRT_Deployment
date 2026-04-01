@@ -134,3 +134,4 @@ add_executable(gamepad_calibration test/gamepad_calibration.cpp)
 
 # 投影重力向量对比测试（欧拉角 vs 四元数）
 add_executable(test_projected_gravity test/test_projected_gravity.cpp)
+target_include_directories(test_projected_gravity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
